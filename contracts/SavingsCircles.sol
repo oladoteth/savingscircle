@@ -40,6 +40,8 @@ contract SavingsCircles is ReentrancyGuard {
         mapping(uint8 => uint8) missCount;
         mapping(address => bool) isMember;
         mapping(address => bool) defaultedInCircle;
+        mapping(address => bool) inviteList;
+        bool hasInviteList;
         // Per member: total USDC they have shorted other recipients across all rounds in this circle.
         mapping(address => uint256) shortfallOwed;
         // Ordered list of shortfall creditors per debtor.
@@ -60,9 +62,11 @@ contract SavingsCircles is ReentrancyGuard {
         uint256 contribution,
         uint64 roundLength,
         uint8 size,
-        uint8 depositRounds
+        uint8 depositRounds,
+        bool hasInviteList
     );
     event Joined(uint256 indexed id, address indexed member, uint256 memberCount);
+    event Left(uint256 indexed id, address indexed member);
     event CircleStarted(uint256 indexed id, uint64 deadline);
     event Contributed(uint256 indexed id, address indexed member, uint8 round);
     event Missed(uint256 indexed id, address indexed member, uint8 round);
@@ -77,10 +81,12 @@ contract SavingsCircles is ReentrancyGuard {
     error InvalidRoundLength();
     error InvalidSize();
     error InvalidDepositRounds();
+    error InviteListTooShort();
     error CircleNotFound();
     error InvalidState();
     error AlreadyMember();
     error NotMember();
+    error NotInvited();
     error AlreadyPaid();
     error RoundClosedAlready();
     error RoundStillOpen();
@@ -95,12 +101,14 @@ contract SavingsCircles is ReentrancyGuard {
         uint256 contribution,
         uint64 roundLength,
         uint8 size,
-        uint8 depositRounds
+        uint8 depositRounds,
+        address[] calldata invited
     ) external nonReentrant returns (uint256 id) {
         if (contribution == 0) revert InvalidContribution();
         if (roundLength == 0) revert InvalidRoundLength();
         if (size < 2 || size > 20) revert InvalidSize();
         if (depositRounds < 1 || depositRounds > size - 1) revert InvalidDepositRounds();
+        if (invited.length > 0 && invited.length < size) revert InviteListTooShort();
 
         id = nextCircleId;
         unchecked {
@@ -114,7 +122,15 @@ contract SavingsCircles is ReentrancyGuard {
         circle.depositRounds = depositRounds;
         circle.state = CircleState.Pending;
 
-        emit CircleCreated(id, msg.sender, contribution, roundLength, size, depositRounds);
+        if (invited.length > 0) {
+            circle.hasInviteList = true;
+            uint256 invitedLength = invited.length;
+            for (uint256 i = 0; i < invitedLength; ++i) {
+                circle.inviteList[invited[i]] = true;
+            }
+        }
+
+        emit CircleCreated(id, msg.sender, contribution, roundLength, size, depositRounds, invited.length > 0);
     }
 
     function join(uint256 id) external nonReentrant {
@@ -123,6 +139,7 @@ contract SavingsCircles is ReentrancyGuard {
 
         if (circle.state != CircleState.Pending) revert InvalidState();
         if (circle.isMember[msg.sender]) revert AlreadyMember();
+        if (circle.hasInviteList && !circle.inviteList[msg.sender]) revert NotInvited();
 
         circle.isMember[msg.sender] = true;
         circle.members.push(msg.sender);
@@ -139,6 +156,35 @@ contract SavingsCircles is ReentrancyGuard {
 
             emit CircleStarted(id, circle.deadline);
         }
+    }
+
+    function leave(uint256 id) external nonReentrant {
+        _requireCircleExists(id);
+        Circle storage circle = circles[id];
+
+        if (circle.state != CircleState.Pending) revert InvalidState();
+        if (!circle.isMember[msg.sender]) revert NotMember();
+
+        uint256 memberDeposit = circle.deposit[msg.sender];
+        if (memberDeposit > 0) {
+            claimable[msg.sender] += memberDeposit;
+        }
+
+        uint256 memberCount = circle.members.length;
+        for (uint256 i = 0; i < memberCount; ++i) {
+            if (circle.members[i] == msg.sender) {
+                for (uint256 j = i; j + 1 < memberCount; ++j) {
+                    circle.members[j] = circle.members[j + 1];
+                }
+                circle.members.pop();
+                break;
+            }
+        }
+
+        circle.deposit[msg.sender] = 0;
+        circle.isMember[msg.sender] = false;
+
+        emit Left(id, msg.sender);
     }
 
     function contribute(uint256 id) external nonReentrant {
@@ -325,6 +371,13 @@ contract SavingsCircles is ReentrancyGuard {
     function shortfallOf(uint256 id, address member) external view returns (uint256) {
         _requireCircleExists(id);
         return circles[id].shortfallOwed[member];
+    }
+
+    function isInvited(uint256 id, address member) external view returns (bool) {
+        _requireCircleExists(id);
+        Circle storage circle = circles[id];
+        if (!circle.hasInviteList) return true;
+        return circle.inviteList[member];
     }
 
     function _requireCircleExists(uint256 id) internal view {

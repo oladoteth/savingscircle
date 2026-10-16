@@ -67,6 +67,7 @@ contract SavingsCirclesTest is Test {
     address internal bob = makeAddr("bob");
     address internal carol = makeAddr("carol");
     address internal dave = makeAddr("dave");
+    address internal eve = makeAddr("eve");
 
     uint256 internal constant CONTRIBUTION = 100e6; // 100 USDC
     uint64 internal constant ROUND_LENGTH = 1 days;
@@ -85,7 +86,7 @@ contract SavingsCirclesTest is Test {
 
     /// Create a circle with CONTRIBUTION / ROUND_LENGTH and return its id.
     function _createCircle(uint8 size, uint8 depositRounds) internal returns (uint256 id) {
-        id = sc.createCircle(CONTRIBUTION, ROUND_LENGTH, size, depositRounds);
+        id = sc.createCircle(CONTRIBUTION, ROUND_LENGTH, size, depositRounds, new address[](0));
     }
 
     /// Advance block.timestamp past the current round deadline and close the round.
@@ -433,11 +434,31 @@ contract SavingsCirclesTest is Test {
 
         // ---- createCircle with depositRounds=0 → InvalidDepositRounds ----
         vm.expectRevert(SavingsCircles.InvalidDepositRounds.selector);
-        sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 0);
+        sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 0, new address[](0));
 
         // ---- createCircle with depositRounds=size → InvalidDepositRounds ----
         vm.expectRevert(SavingsCircles.InvalidDepositRounds.selector);
-        sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 3);
+        sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 3, new address[](0));
+
+        // ---- NotInvited: join invited circle as uninvited caller ----
+        address invitee1 = makeAddr("invitee1");
+        address invitee2 = makeAddr("invitee2");
+        address invitee3 = makeAddr("invitee3");
+        address[] memory inviteList = new address[](3);
+        inviteList[0] = invitee1;
+        inviteList[1] = invitee2;
+        inviteList[2] = invitee3;
+        uint256 invitedId = sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 1, inviteList);
+        vm.prank(alice); // alice is NOT in inviteList
+        vm.expectRevert(SavingsCircles.NotInvited.selector);
+        sc.join(invitedId);
+
+        // ---- InviteListTooShort: invited.length < size ----
+        address[] memory shortList = new address[](2);
+        shortList[0] = invitee1;
+        shortList[1] = invitee2;
+        vm.expectRevert(SavingsCircles.InviteListTooShort.selector);
+        sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 1, shortList);
     }
 
     // =======================================================================
@@ -486,7 +507,7 @@ contract SavingsCirclesTest is Test {
         rtkn.mint(carol, 400e6);
         vm.prank(carol); rtkn.approve(address(scR), type(uint256).max);
 
-        uint256 id = scR.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 1);
+        uint256 id = scR.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 1, new address[](0));
         vm.prank(alice); scR.join(id);
         vm.prank(bob);   scR.join(id);
         vm.prank(carol); scR.join(id);
@@ -601,12 +622,12 @@ contract SavingsCirclesTest is Test {
         _fund(dave,  200e6 + 2 * 200e6); // 600e6
 
         // Circle A
-        uint256 idA = sc.createCircle(100e6, ROUND_LENGTH, 2, 1);
+        uint256 idA = sc.createCircle(100e6, ROUND_LENGTH, 2, 1, new address[](0));
         vm.prank(alice); sc.join(idA); // member[0], recipient round 0
         vm.prank(bob);   sc.join(idA); // member[1], recipient round 1
 
         // Circle B
-        uint256 idB = sc.createCircle(200e6, ROUND_LENGTH, 2, 1);
+        uint256 idB = sc.createCircle(200e6, ROUND_LENGTH, 2, 1, new address[](0));
         vm.prank(carol); sc.join(idB); // member[0], recipient round 0
         vm.prank(dave);  sc.join(idB); // member[1], recipient round 1
 
@@ -841,45 +862,45 @@ contract SavingsCirclesTest is Test {
     function test_createCircleDepositRoundsReverts() public {
         // depositRounds=0 → InvalidDepositRounds
         vm.expectRevert(SavingsCircles.InvalidDepositRounds.selector);
-        sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 0);
+        sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 0, new address[](0));
 
         // depositRounds=size (=3) → InvalidDepositRounds
         vm.expectRevert(SavingsCircles.InvalidDepositRounds.selector);
-        sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 3);
+        sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 3, new address[](0));
 
         // depositRounds=size-1 (=2) → succeeds
-        uint256 id = sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 2);
+        uint256 id = sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 2, new address[](0));
         (, , uint8 sz, , , , , uint8 dr, ) = sc.getCircle(id);
         assertEq(sz, 3);
         assertEq(dr, 2);
 
         // depositRounds=1 → valid
-        uint256 id2 = sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 1);
+        uint256 id2 = sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 1, new address[](0));
         (, , , , , , , uint8 dr2, ) = sc.getCircle(id2);
         assertEq(dr2, 1);
 
         // size=2, depositRounds=1 (=size-1) → succeeds
-        uint256 id3 = sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 2, 1);
+        uint256 id3 = sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 2, 1, new address[](0));
         (, , uint8 sz3, , , , , uint8 dr3, ) = sc.getCircle(id3);
         assertEq(sz3, 2);
         assertEq(dr3, 1);
 
         // size=2, depositRounds=2 (=size) → fails
         vm.expectRevert(SavingsCircles.InvalidDepositRounds.selector);
-        sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 2, 2);
+        sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 2, 2, new address[](0));
 
         // Other createCircle reverts
         vm.expectRevert(SavingsCircles.InvalidContribution.selector);
-        sc.createCircle(0, ROUND_LENGTH, 3, 1);
+        sc.createCircle(0, ROUND_LENGTH, 3, 1, new address[](0));
 
         vm.expectRevert(SavingsCircles.InvalidRoundLength.selector);
-        sc.createCircle(CONTRIBUTION, 0, 3, 1);
+        sc.createCircle(CONTRIBUTION, 0, 3, 1, new address[](0));
 
         vm.expectRevert(SavingsCircles.InvalidSize.selector);
-        sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 1, 1);
+        sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 1, 1, new address[](0));
 
         vm.expectRevert(SavingsCircles.InvalidSize.selector);
-        sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 21, 1);
+        sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 21, 1, new address[](0));
     }
 
     // =======================================================================
@@ -890,9 +911,9 @@ contract SavingsCirclesTest is Test {
         _fund(bob,   400e6);
         _fund(carol, 400e6);
 
-        // CircleCreated event (id=0, creator=this test contract)
+        // CircleCreated event (id=0, creator=this test contract, hasInviteList=false for open circle)
         vm.expectEmit(true, true, false, true, address(sc));
-        emit SavingsCircles.CircleCreated(0, address(this), CONTRIBUTION, ROUND_LENGTH, 3, 1);
+        emit SavingsCircles.CircleCreated(0, address(this), CONTRIBUTION, ROUND_LENGTH, 3, 1, false);
         uint256 id = _createCircle(3, 1);
         assertEq(id, 0);
 
@@ -993,9 +1014,9 @@ contract SavingsCirclesTest is Test {
     // =======================================================================
     function test_nextCircleIdIncrements() public {
         assertEq(sc.nextCircleId(), 0);
-        sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 1);
+        sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 1, new address[](0));
         assertEq(sc.nextCircleId(), 1);
-        sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 1);
+        sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 1, new address[](0));
         assertEq(sc.nextCircleId(), 2);
     }
 
@@ -1013,7 +1034,7 @@ contract SavingsCirclesTest is Test {
         size          = uint8(bound(uint256(size), 2, 20));
         depositRounds = uint8(bound(uint256(depositRounds), 1, uint256(size) - 1));
 
-        uint256 id = sc.createCircle(contribution, roundLength, size, depositRounds);
+        uint256 id = sc.createCircle(contribution, roundLength, size, depositRounds, new address[](0));
 
         (
             uint256 c,
@@ -1330,6 +1351,329 @@ contract SavingsCirclesTest is Test {
         vm.prank(bob);   sc.withdraw();
 
         assertEq(usdc.balanceOf(address(sc)), 0, "contract balance = 0");
+    }
+
+    // =======================================================================
+    // Test 18 — leave(): deposit refunded, member removed, circle can refill
+    // =======================================================================
+    function test_leave() public {
+        // ---- Sub-test A: Alice joins a 3-member circle, then leaves. ----
+        // Alice and Bob each funded with 200e6 (deposit=100e6 each).
+        _fund(alice, 200e6);
+        _fund(bob,   200e6);
+        _fund(carol, 200e6);
+
+        uint256 id = _createCircle(3, 1);
+        vm.prank(alice); sc.join(id);
+        vm.prank(bob);   sc.join(id);
+
+        // Verify initial state
+        assertEq(sc.depositOf(id, alice), 100e6, "alice deposit before leave");
+        assertEq(sc.claimable(alice), 0, "alice claimable before leave");
+
+        // Alice leaves — deposit credited to claimable
+        vm.expectEmit(true, true, false, false, address(sc));
+        emit SavingsCircles.Left(id, alice);
+        vm.prank(alice); sc.leave(id);
+
+        // After leave: deposit zeroed, claimable has the deposit back
+        assertEq(sc.depositOf(id, alice), 0, "alice deposit zeroed after leave");
+        assertEq(sc.claimable(alice), 100e6, "alice claimable = deposit after leave");
+
+        // Alice is no longer a member
+        address[] memory members = sc.getMembers(id);
+        assertEq(members.length, 1, "only bob remains");
+        assertEq(members[0], bob, "bob is still there");
+
+        // isInvited unaffected (open circle returns true for everyone)
+        assertTrue(sc.isInvited(id, alice), "open circle: alice still isInvited");
+
+        // Alice withdraws: started with 200, spent 100 on deposit, gets 100 back → net 200
+        vm.prank(alice); sc.withdraw();
+        assertEq(usdc.balanceOf(alice), 200e6, "alice net balance restored after leave + withdraw");
+
+        // ---- Sub-test B: Circle goes Active — leave() reverts InvalidState. ----
+        _fund(alice, 200e6);
+        _fund(dave,  200e6);
+        uint256 id2 = _createCircle(2, 1);
+        vm.prank(alice); sc.join(id2);
+        vm.prank(dave);  sc.join(id2); // last join → Active
+
+        (, , , , , , SavingsCircles.CircleState st2, , ) = sc.getCircle(id2);
+        assertEq(uint8(st2), uint8(SavingsCircles.CircleState.Active), "circle is active");
+
+        vm.prank(alice);
+        vm.expectRevert(SavingsCircles.InvalidState.selector);
+        sc.leave(id2);
+
+        // ---- Sub-test C: Non-member leaves → NotMember. ----
+        uint256 id3 = _createCircle(2, 1);
+        vm.prank(bob); sc.join(id3);
+
+        vm.prank(carol); // carol is not a member
+        vm.expectRevert(SavingsCircles.NotMember.selector);
+        sc.leave(id3);
+
+        // ---- Sub-test D: Circle fills after leave (slot replaced, circle starts). ----
+        // Fresh funds for the participants. Bob spent all his USDC across sub-tests A and C
+        // (100e6 deposit for id=0, 100e6 deposit for id=2), so re-fund him.
+        _fund(alice, 200e6);
+        _fund(bob,   200e6);
+        _fund(carol, 200e6);
+        _fund(eve,   200e6);
+
+        // Create 3-member circle. Alice and Bob join. Alice leaves. Carol and Eve join → Active.
+        uint256 id4 = _createCircle(3, 1);
+        vm.prank(alice); sc.join(id4);  // member[0]
+        vm.prank(bob);   sc.join(id4);  // member[1]
+
+        // Alice leaves — removes slot 0, bob shifts to [0]
+        vm.prank(alice); sc.leave(id4);
+
+        address[] memory afterLeave = sc.getMembers(id4);
+        assertEq(afterLeave.length, 1, "only bob after alice leaves");
+        assertEq(afterLeave[0], bob, "bob at index 0 after alice removed");
+
+        // Carol joins (slot 1)
+        vm.prank(carol); sc.join(id4);
+
+        // Eve joins as the 3rd member → triggers Active + CircleStarted
+        vm.expectEmit(true, false, false, false, address(sc));
+        emit SavingsCircles.CircleStarted(id4, 0); // deadline value not checked
+        vm.prank(eve); sc.join(id4);
+
+        (, , , , , , SavingsCircles.CircleState st4, , ) = sc.getCircle(id4);
+        assertEq(uint8(st4), uint8(SavingsCircles.CircleState.Active), "circle started after refill");
+
+        address[] memory finalMembers = sc.getMembers(id4);
+        assertEq(finalMembers.length, 3, "3 members in refilled circle");
+        assertEq(finalMembers[0], bob,   "bob is member[0]");
+        assertEq(finalMembers[1], carol, "carol is member[1]");
+        assertEq(finalMembers[2], eve,   "eve is member[2]");
+
+        // Alice is no longer in the members list
+        bool aliceFound = false;
+        for (uint256 i = 0; i < finalMembers.length; i++) {
+            if (finalMembers[i] == alice) aliceFound = true;
+        }
+        assertFalse(aliceFound, "alice not in final members");
+    }
+
+    // =======================================================================
+    // Test 19 — Invite list: NotInvited revert, invited join works,
+    //           open circle isInvited returns true, InviteListTooShort revert,
+    //           full invited circle runs to completion
+    // =======================================================================
+    function test_inviteList() public {
+        // ---- Sub-test A: uninvited caller → NotInvited. ----
+        address[] memory inviteList = new address[](3);
+        inviteList[0] = alice;
+        inviteList[1] = bob;
+        inviteList[2] = carol;
+
+        uint256 id = sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 1, inviteList);
+
+        // isInvited checks
+        assertTrue(sc.isInvited(id, alice),  "alice is invited");
+        assertTrue(sc.isInvited(id, bob),    "bob is invited");
+        assertTrue(sc.isInvited(id, carol),  "carol is invited");
+        assertFalse(sc.isInvited(id, dave),  "dave is NOT invited");
+
+        // Dave tries to join → NotInvited
+        _fund(dave, 200e6);
+        vm.prank(dave);
+        vm.expectRevert(SavingsCircles.NotInvited.selector);
+        sc.join(id);
+
+        // ---- Sub-test B: Invited members join and circle runs to completion. ----
+        // Each needs: deposit(100) + 3 contributions(300) = 400e6
+        _fund(alice, 400e6);
+        _fund(bob,   400e6);
+        _fund(carol, 400e6);
+
+        vm.prank(alice); sc.join(id);
+        vm.prank(bob);   sc.join(id);
+        vm.prank(carol); sc.join(id); // last join → Active
+
+        (, , , , , , SavingsCircles.CircleState st, , ) = sc.getCircle(id);
+        assertEq(uint8(st), uint8(SavingsCircles.CircleState.Active), "invited circle active");
+
+        // Run all 3 rounds (everyone pays) — simple happy path
+        // Round 0: alice recipient
+        vm.prank(alice); sc.contribute(id);
+        vm.prank(bob);   sc.contribute(id);
+        vm.prank(carol); sc.contribute(id);
+        _advanceAndClose(id);
+        vm.prank(alice); sc.withdraw();
+
+        // Round 1: bob recipient
+        vm.prank(alice); sc.contribute(id);
+        vm.prank(bob);   sc.contribute(id);
+        vm.prank(carol); sc.contribute(id);
+        _advanceAndClose(id);
+        vm.prank(bob); sc.withdraw();
+
+        // Round 2: carol recipient (last round → CircleFinished)
+        vm.prank(alice); sc.contribute(id);
+        vm.prank(bob);   sc.contribute(id);
+        vm.prank(carol); sc.contribute(id);
+        _advanceAndClose(id);
+
+        vm.prank(carol); sc.withdraw();
+        vm.prank(alice); sc.withdraw();
+        vm.prank(bob);   sc.withdraw();
+
+        // Contract balance must be zero
+        assertEq(usdc.balanceOf(address(sc)), 0, "contract balance = 0 after invited circle");
+
+        // ---- Sub-test C: InviteListTooShort → invited.length < size. ----
+        address[] memory shortList = new address[](2);
+        shortList[0] = alice;
+        shortList[1] = bob;
+        vm.expectRevert(SavingsCircles.InviteListTooShort.selector);
+        sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 3, 1, shortList);
+
+        // ---- Sub-test D: Open circle isInvited returns true for everyone. ----
+        _fund(eve, 200e6);
+        uint256 openId = sc.createCircle(CONTRIBUTION, ROUND_LENGTH, 2, 1, new address[](0));
+        assertTrue(sc.isInvited(openId, dave), "open circle: dave isInvited = true");
+        assertTrue(sc.isInvited(openId, eve),  "open circle: eve isInvited = true");
+
+        // Dave joins the open circle → succeeds
+        vm.prank(dave); sc.join(openId);
+        address[] memory openMembers = sc.getMembers(openId);
+        assertEq(openMembers.length, 1, "dave joined open circle");
+        assertEq(openMembers[0], dave, "dave is first member of open circle");
+    }
+
+    // =======================================================================
+    // Test 20 — Repayment: pot == debt (recipient gets 0, creditor gets full debt)
+    //
+    // This test demonstrates the repayment waterfall in the boundary case where
+    // the gross pot exactly equals the debtor's outstanding shortfall. The creditor
+    // receives the full debt amount, and the recipient (debtor) receives 0.
+    //
+    // NOTE on strict partial repayment (pot < debt):
+    //   This branch is architecturally unreachable in a standard integer-contribution
+    //   circle. A member can accumulate shortfall entries only from non-recipient rounds,
+    //   and each entry is at most one contribution. The minimum pot for a recipient's round
+    //   equals (size-1) × contribution from other members' deposits — which equals the
+    //   maximum possible accumulated shortfall. Hence pot >= debt always holds, and the
+    //   `remaining < entry.amount` branch in the repayment loop can never fire with valid
+    //   on-chain inputs. The pot == debt scenario tested here is the closest empirically
+    //   verifiable boundary to that unreachable code path.
+    //
+    // Setup: 3-member (Alice=r0, Bob=r1, Carol=r2), depositRounds=1, contribution=100e6.
+    //   Round 0 (Alice): Alice pays. Bob & Carol miss (deposit→0). Pot=300. Alice gets 300.
+    //   Round 1 (Bob): Alice & Bob pay. Carol defaults (deposit=0, shortage=100→Bob). Pot=200.
+    //   Round 2 (Carol): Alice pays. Bob defaults (deposit=0, shortage=100→Carol). Carol exempt.
+    //                    Gross pot=100. Carol's shortfall=[{Bob,100}]. Repay min(100,100)=100 → Bob.
+    //                    Carol gets 0. shortfallOf(carol)=0.
+    // =======================================================================
+    function test_repayment_partialDebt() public {
+        // Alice: deposit(100) + r0(100) + r1(100) + r2(100) = 400e6
+        // Bob:   deposit(100) + r1(100) = 200e6
+        //        (misses r0, deposit consumed; defaults r2 with deposit=0)
+        // Carol: deposit(100) = 100e6
+        //        (misses r0, deposit consumed; defaults r1; is recipient r2)
+        _fund(alice, 400e6);
+        _fund(bob,   200e6);
+        _fund(carol, 100e6);
+
+        uint256 id = _createCircle(3, 1);
+        vm.prank(alice); sc.join(id); // member[0], recipient round 0
+        vm.prank(bob);   sc.join(id); // member[1], recipient round 1
+        vm.prank(carol); sc.join(id); // member[2], recipient round 2
+
+        // ---- Round 0: alice recipient. Alice pays. Bob & Carol miss (deposits consumed). ----
+        vm.prank(alice); sc.contribute(id);
+        // Bob: deposit 100e6 >= 100e6 → Missed, deposit→0
+        // Carol: deposit 100e6 >= 100e6 → Missed, deposit→0
+
+        (, , , , , uint64 dl0, , , ) = sc.getCircle(id);
+        vm.warp(dl0 + 1);
+        sc.closeRound(id);
+        // pot = alice(100) + bob_dep(100) + carol_dep(100) = 300e6
+
+        assertEq(sc.claimable(alice), 300e6, "alice r0 pot");
+        assertEq(sc.depositOf(id, bob),   0, "bob deposit consumed r0");
+        assertEq(sc.depositOf(id, carol), 0, "carol deposit consumed r0");
+
+        vm.prank(alice); sc.withdraw();
+
+        // ---- Round 1: bob recipient. Alice & Bob pay. Carol defaults (deposit=0). ----
+        vm.prank(alice); sc.contribute(id);
+        vm.prank(bob);   sc.contribute(id);
+        // Carol: deposit=0 < 100e6 → Defaulted, shortage=100e6 owed to Bob
+
+        (, , , , , uint64 dl1, , , ) = sc.getCircle(id);
+        vm.warp(dl1 + 1);
+
+        vm.expectEmit(true, true, false, true, address(sc));
+        emit SavingsCircles.Defaulted(id, carol, 1);
+        // pot = alice(100) + bob(100) + carol(0) = 200e6
+        vm.expectEmit(true, false, true, true, address(sc));
+        emit SavingsCircles.RoundClosed(id, 1, bob, 200e6);
+        sc.closeRound(id);
+
+        assertEq(sc.claimable(bob), 200e6,         "bob r1 short pot");
+        assertEq(sc.shortfallOf(id, carol), 100e6, "carol shortfall after r1 default");
+        assertEq(sc.depositOf(id, alice), 100e6,   "alice deposit intact");
+
+        vm.prank(bob); sc.withdraw();
+
+        // ---- Round 2: carol recipient. Alice pays. Bob defaults (deposit=0). ----
+        // pot = alice_contrib(100e6). Bob (deposit=0, not recipient) → Defaulted, shortage=100→Carol.
+        // Carol is recipient → exempt (does not contribute).
+        // Carol's shortfallQueue = [{creditor=Bob, 100e6}].
+        // Repayment: take min(100, 100) = 100 → Bob gets 100. Carol gets 0.
+        // KEY ASSERTION: pot (100) == debt (100) → recipient gets 0.
+        vm.prank(alice); sc.contribute(id);
+        // Bob does NOT contribute — deposit=0 → Defaulted
+
+        (, , , , , uint64 dl2, , , ) = sc.getCircle(id);
+        vm.warp(dl2 + 1);
+
+        // Expect Defaulted for Bob in r2
+        vm.expectEmit(true, true, false, true, address(sc));
+        emit SavingsCircles.Defaulted(id, bob, 2);
+        // Expect Repaid: debtor=carol, creditor=bob, amount=100e6
+        vm.expectEmit(true, true, true, true, address(sc));
+        emit SavingsCircles.Repaid(id, carol, bob, 100e6);
+        // RoundClosed emits GROSS pot (100e6)
+        vm.expectEmit(true, false, true, true, address(sc));
+        emit SavingsCircles.RoundClosed(id, 2, carol, 100e6);
+        sc.closeRound(id); // last round → CircleFinished
+
+        // pot == debt → creditor (bob) gets full debt, recipient (carol) gets 0
+        assertEq(sc.shortfallOf(id, carol), 0,      "carol shortfall cleared (pot == debt)");
+        assertEq(sc.shortfallOf(id, bob),   100e6,  "bob shortfall persists (no future recipient round)");
+
+        // claimable[carol] = 100e6 gross - 100e6 repaid = 0; deposit=0
+        assertEq(sc.claimable(carol), 0,     "carol claimable = 0 (full pot consumed by repayment)");
+        // claimable[bob] = 100e6 from repayment; deposit=0 (consumed r0); no deposit return
+        assertEq(sc.claimable(bob),   100e6, "bob claimable = repayment only");
+        // claimable[alice] = 100e6 deposit returned at finish (r0 pot was withdrawn already)
+        assertEq(sc.claimable(alice), 100e6, "alice deposit returned at finish");
+
+        vm.prank(alice); sc.withdraw();
+        vm.prank(bob);   sc.withdraw();
+        // carol has claimable=0 — no withdraw needed
+
+        assertEq(usdc.balanceOf(address(sc)), 0, "contract balance = 0");
+
+        // Total inflows:  alice(400) + bob(200) + carol(100) = 700e6
+        // Total outflows: alice(300 r0 + 100 deposit) + bob(200 r1 + 100 repaid) + carol(0) = 700e6 ✓
+        // alice: minted 400, spent 400 (deposit+3 contribs), received 300(r0)+100(deposit) = 400 ✓
+        assertEq(usdc.balanceOf(alice), 400e6, "alice net zero");
+        // bob: minted 200, spent 200 (deposit+r1 contrib), received 200(r1 short pot)+100(repaid) = 300 ✓
+        assertEq(usdc.balanceOf(bob),   300e6, "bob net: 200 in, 300 out (r1 pot + repayment)");
+        // carol: minted 100 (deposit only), deposit consumed (r0 miss), full pot consumed by repayment = 0
+        assertEq(usdc.balanceOf(carol), 0,     "carol net: 100 funded, all consumed");
+
+        _assertRep(alice, 1, 3, 0, 0); // paid r0+r1+r2, completed
+        _assertRep(bob,   0, 1, 2, 1); // paid r1, missed r0 (deposit→Missed), defaulted r2
+        _assertRep(carol, 0, 0, 3, 1); // missed r0 (deposit→Missed), defaulted r1, missed r2 as recipient
     }
 
     // =======================================================================

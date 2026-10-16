@@ -39,15 +39,25 @@ The tradeoff: higher `depositRounds` = stronger guarantees for recipients, but h
 
 ### createCircle signature
 
-`createCircle(uint256 contribution, uint64 roundLength, uint8 size, uint8 depositRounds) returns (uint256 id)`
+`createCircle(uint256 contribution, uint64 roundLength, uint8 size, uint8 depositRounds, address[] calldata invited) returns (uint256 id)`
 
-Constraints: contribution>0, roundLength>0, size in [2,20], depositRounds in [1, size-1].
+Constraints: contribution>0, roundLength>0, size in [2,20], depositRounds in [1, size-1]. If `invited` is non-empty, `invited.length >= size` is required. Pass an empty array for open circles.
+
+### Other functions
+
+- `leave(uint256 id)` — Pending-only, members only. Refunds deposit to claimable, removes member preserving order, emits Left.
+- `isInvited(uint256 id, address member)` — returns true for open circles; checks invite list for restricted circles.
+- `shortfallOf(uint256 id, address member)` — outstanding unpaid shortfall for a member in a circle.
 
 ### Tests
 
-15 tests, all passing. Run with `bun run contracts:test` (`forge test`). Test file: `contracts/test/SavingsCircles.t.sol`.
+22 tests, all passing. Run with `bun run contracts:test` (`forge test`). Test file: `contracts/test/SavingsCircles.t.sol`.
 
-Coverage: happy path (zero balance at end), non-recipient miss with deposit coverage, double-default with short pot, all revert cases, withdraw reentrancy guard, reputation counters, two concurrent circles, depositRounds=size-1 full-collateral guarantee, recipient-miss exemption, invalid depositRounds reverts.
+Coverage: happy path, non-recipient miss with deposit coverage, double-default with short pot + repayment, all revert cases, withdraw reentrancy guard, reputation counters, two concurrent circles, depositRounds=size-1 guarantee, recipient-miss exemption, invalid depositRounds reverts, repayment waterfall (full and exact-debt), leave function, invite list.
+
+### Known limitation: reputation farming
+
+The on-chain reputation counters (`completedCircles`, `onTimePayments`, etc.) are not Sybil-resistant. A single person controlling multiple wallets can inflate their reputation by running small circles between those wallets at minimal cost. Treat on-chain reputation as a weak signal and combine it with off-chain trust and social context.
 
 ## Tech Stack
 

@@ -1,0 +1,13 @@
+# dependencies
+node_modules/
+
+# environment secrets
+.env
+.env.*
+
+# Foundry build artifacts
+contracts/out/
+contracts/cache/
+
+# Arc Studio runtime logs
+console.jsonl

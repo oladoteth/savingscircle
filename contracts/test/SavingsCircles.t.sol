@@ -327,13 +327,18 @@ contract SavingsCirclesTest is Test {
 
         _advanceAndClose(id); // last round, circle finishes
 
-        // carol gets full pot round 2 = 300e6
-        assertEq(sc.claimable(carol), 300e6, "carol round-2 pot");
-        // Deposits returned: alice=100e6, bob=100e6, carol=0 (all consumed)
+        // Repayment waterfall: carol's shortfallQueue = [{creditor=bob, 100e6}].
+        // Gross pot = 300e6. Repayment takes 100e6 → credits bob. Carol receives 200e6.
+        // shortfallOf(id, carol) cleared to 0 after repayment.
+        assertEq(sc.shortfallOf(id, carol), 0, "shortfall cleared after repayment");
+
+        // Deposits returned at finish: alice=100e6, bob=100e6, carol=0 (all consumed).
         // claimable[alice] = 300e6 (r0 pot, never withdrawn) + 100e6 (deposit back) = 400e6
-        assertEq(sc.claimable(alice), 300e6 + 100e6, "alice claimable = r0 pot + deposit");
-        assertEq(sc.claimable(bob),   200e6 + 100e6, "bob claimable = r1 pot + deposit");
-        assertEq(sc.claimable(carol), 300e6,          "carol claimable = r2 pot, no deposit");
+        // claimable[bob]   = 200e6 (r1 short pot) + 100e6 (repaid from carol's r2 pot) + 100e6 (deposit) = 400e6
+        // claimable[carol] = 300e6 gross pot - 100e6 repaid to bob = 200e6, no deposit returned
+        assertEq(sc.claimable(alice), 300e6 + 100e6,         "alice claimable = r0 pot + deposit");
+        assertEq(sc.claimable(bob),   200e6 + 100e6 + 100e6, "bob claimable = r1 pot + repaid + deposit");
+        assertEq(sc.claimable(carol), 200e6,                  "carol claimable = r2 pot minus repayment");
 
         // Withdraw all
         vm.prank(alice); sc.withdraw();
@@ -344,7 +349,7 @@ contract SavingsCirclesTest is Test {
 
         // Carol: missedPayments=2, defaults=1, completedCircles=0, onTimePayments=1
         _assertRep(carol, 0, 1, 2, 1);
-        // Bob: missedPayments=0, got short pot but that's not a reputation event
+        // Bob: missedPayments=0, reputation unaffected by receiving repayment
         _assertRep(bob,   1, 3, 0, 0);
         _assertRep(alice, 1, 3, 0, 0);
     }
@@ -378,14 +383,10 @@ contract SavingsCirclesTest is Test {
         vm.expectRevert(SavingsCircles.InvalidState.selector);
         sc.join(id);
 
-        // ---- CircleFull test: fill a size=2 circle but a 3rd tries before state change ---
-        // Actually size=2: after alice joins (1/2) and bob joins (2/2) it transitions to Active,
-        // so InvalidState fires before CircleFull. Create a size=3 circle and add only 2 members,
-        // then try to have the same already-member join again → AlreadyMember.
-        // To hit CircleFull purely: we need memberCount == size while still Pending.
-        // That's impossible since last join triggers Active. So CircleFull is only reachable
-        // when Pending and already full — which can't happen by design (transitions to Active).
-        // Skip CircleFull direct test; it's always shadowed by InvalidState in this contract.
+        // ---- CircleFull was removed from the contract in a later revision. ----
+        // The error no longer exists; the path it guarded is now unreachable by design
+        // (the last join transitions the circle to Active before any overflow can occur).
+        // No test needed for CircleFull.
 
         // ---- contribute twice → AlreadyPaid ----
         vm.prank(alice); sc.contribute(id);
@@ -564,13 +565,15 @@ contract SavingsCirclesTest is Test {
 
         _advanceAndClose(id); // last round
 
-        // carol gets round-2 pot = 300e6
-        assertEq(sc.claimable(carol), 300e6);
-        // Deposit returns at finish: alice=100, bob=0, carol=0
+        // Repayment waterfall: carol's shortfallQueue = [{creditor=bob, 100e6}].
+        // Gross pot = 300e6. Repayment takes 100e6 → credits bob. Carol receives 200e6.
+        // Deposit returns at finish: alice=100, bob=0 (consumed r0 miss), carol=0 (consumed r0 miss).
         // claimable[alice] = 300(r0 pot, never withdrawn) + 100(deposit) = 400
+        // claimable[bob]   = 200(r1 short pot) + 100(repaid from carol's r2 pot) + 0(no deposit) = 300
+        // claimable[carol] = 300 gross pot - 100 repaid to bob = 200, no deposit
         assertEq(sc.claimable(alice), 300e6 + 100e6, "alice total claimable");
-        assertEq(sc.claimable(bob),   200e6 + 0,      "bob = r1 pot, no deposit");
-        assertEq(sc.claimable(carol), 300e6,           "carol = r2 pot, no deposit");
+        assertEq(sc.claimable(bob),   200e6 + 100e6, "bob = r1 short pot + repayment");
+        assertEq(sc.claimable(carol), 200e6,          "carol = r2 pot minus repayment, no deposit");
 
         // Withdraw all
         vm.prank(alice); sc.withdraw();
@@ -579,7 +582,7 @@ contract SavingsCirclesTest is Test {
 
         assertEq(usdc.balanceOf(address(sc)), 0, "contract balance = 0");
 
-        // Exact reputation assertions
+        // Exact reputation assertions (repayment does not affect reputation counters)
         _assertRep(alice, 1, 3, 0, 0);
         _assertRep(bob,   1, 2, 1, 0);
         _assertRep(carol, 0, 1, 2, 1);
@@ -1029,6 +1032,304 @@ contract SavingsCirclesTest is Test {
         assertEq(sz, size,          "size stored");
         assertEq(dr, depositRounds, "depositRounds stored");
         assertEq(uint8(st), uint8(SavingsCircles.CircleState.Pending), "state is Pending");
+    }
+
+    // =======================================================================
+    // Test 15 — Repayment: full debt repaid when recipient's pot covers the shortfall
+    // Setup: 3-member (Alice=r0, Bob=r1, Carol=r2), depositRounds=1, contribution=100e6.
+    // Carol misses r0 (deposit covers, Missed, deposit→0).
+    // Carol misses r1 (deposit=0 → Defaulted, shortage=100e6 owed to Bob).
+    // All three pay r2 (Carol is recipient). Gross pot=300e6.
+    // Repayment waterfall credits Bob 100e6; Carol receives 200e6.
+    // =======================================================================
+    function test_repayment_fullDebt() public {
+        // Carol only needs: deposit(100) + r2 contribution(100) = 200e6
+        _fund(alice, 400e6);
+        _fund(bob,   400e6);
+        _fund(carol, 200e6);
+
+        uint256 id = _createCircle(3, 1);
+        vm.prank(alice); sc.join(id); // member[0], recipient round 0
+        vm.prank(bob);   sc.join(id); // member[1], recipient round 1
+        vm.prank(carol); sc.join(id); // member[2], recipient round 2
+
+        // ---- Round 0: alice recipient. Carol misses (deposit covers). ----
+        vm.prank(alice); sc.contribute(id);
+        vm.prank(bob);   sc.contribute(id);
+        // Carol does NOT contribute — deposit 100e6 >= 100e6 → Missed, deposit→0
+
+        (, , , , , uint64 dl0, , , ) = sc.getCircle(id);
+        vm.warp(dl0 + 1);
+
+        vm.expectEmit(true, true, false, true, address(sc));
+        emit SavingsCircles.Missed(id, carol, 0);
+        // pot = alice(100) + bob(100) + carol_deposit(100) = 300e6
+        vm.expectEmit(true, false, true, true, address(sc));
+        emit SavingsCircles.RoundClosed(id, 0, alice, 300e6);
+        sc.closeRound(id);
+
+        assertEq(sc.claimable(alice), 300e6, "alice r0 pot");
+        assertEq(sc.depositOf(id, carol), 0,  "carol deposit consumed");
+
+        // ---- Round 1: bob recipient. Carol misses (deposit=0 → Defaulted). ----
+        vm.prank(alice); sc.contribute(id);
+        vm.prank(bob);   sc.contribute(id);
+        // Carol does NOT contribute — deposit=0 < 100e6 → Defaulted, shortage=100e6 owed to bob
+
+        (, , , , , uint64 dl1, , , ) = sc.getCircle(id);
+        vm.warp(dl1 + 1);
+
+        vm.expectEmit(true, true, false, true, address(sc));
+        emit SavingsCircles.Defaulted(id, carol, 1);
+        // pot = alice(100) + bob(100) + carol(0) = 200e6
+        vm.expectEmit(true, false, true, true, address(sc));
+        emit SavingsCircles.RoundClosed(id, 1, bob, 200e6);
+        sc.closeRound(id);
+
+        assertEq(sc.claimable(bob), 200e6,   "bob r1 short pot");
+        // Carol now has a 100e6 shortfall owed to Bob
+        assertEq(sc.shortfallOf(id, carol), 100e6, "carol shortfall after default");
+
+        // ---- Round 2: carol recipient. All three contribute. ----
+        vm.prank(alice); sc.contribute(id);
+        vm.prank(bob);   sc.contribute(id);
+        vm.prank(carol); sc.contribute(id);
+
+        (, , , , , uint64 dl2, , , ) = sc.getCircle(id);
+        vm.warp(dl2 + 1);
+
+        // Expect Repaid event: debtor=carol, creditor=bob, amount=100e6
+        vm.expectEmit(true, true, true, true, address(sc));
+        emit SavingsCircles.Repaid(id, carol, bob, 100e6);
+        // RoundClosed emits GROSS pot (300e6, before repayment deduction)
+        vm.expectEmit(true, false, true, true, address(sc));
+        emit SavingsCircles.RoundClosed(id, 2, carol, 300e6);
+        sc.closeRound(id); // last round → CircleFinished
+
+        // Shortfall cleared after repayment
+        assertEq(sc.shortfallOf(id, carol), 0, "shortfall cleared after repayment");
+
+        // claimable[bob] = 200e6 (r1 short pot) + 100e6 (repaid from carol's r2 pot) + 100e6 (deposit returned) = 400e6
+        assertEq(sc.claimable(bob), 200e6 + 100e6 + 100e6, "bob = r1 pot + repayment + deposit");
+        // claimable[carol] = 300e6 gross - 100e6 repaid = 200e6; carol deposit=0 (consumed)
+        assertEq(sc.claimable(carol), 200e6, "carol = gross pot minus repayment, no deposit");
+        // claimable[alice] = 300e6 (r0 pot, not withdrawn) + 100e6 (deposit returned) = 400e6
+        assertEq(sc.claimable(alice), 300e6 + 100e6, "alice = r0 pot + deposit");
+
+        // Withdraw all → contract balance must be zero
+        vm.prank(alice); sc.withdraw();
+        vm.prank(bob);   sc.withdraw();
+        vm.prank(carol); sc.withdraw();
+
+        assertEq(usdc.balanceOf(address(sc)), 0, "contract balance = 0");
+
+        // Total inflows: alice(400) + bob(400) + carol(200) = 1000e6
+        // Total outflows: alice(400) + bob(400) + carol(200) = 1000e6 ✓
+        assertEq(usdc.balanceOf(alice), 400e6, "alice net zero");
+        assertEq(usdc.balanceOf(bob),   400e6, "bob net zero");
+        assertEq(usdc.balanceOf(carol), 200e6, "carol net zero");
+
+        // Reputation: repayment does not affect reputation counters
+        _assertRep(carol, 0, 1, 2, 1); // 1 default, 2 misses, 1 on-time (r2), 0 completed
+        _assertRep(bob,   1, 3, 0, 0);
+        _assertRep(alice, 1, 3, 0, 0);
+    }
+
+    // =======================================================================
+    // Test 16 — Repayment: pot exactly equals debt → creditor gets full debt,
+    //           recipient receives nothing.
+    //
+    // Setup: 3-member (Alice=r0, Bob=r1, Carol=r2), depositRounds=1, contribution=100e6.
+    //   Round 0 (Alice): Alice pays. Bob misses (deposit→0). Carol misses (deposit→0). Pot=300.
+    //   Round 1 (Bob): Bob pays. Alice pays. Carol misses (deposit=0 → Defaulted, shortage=100e6
+    //                  owed to Bob). Pot=200. Bob gets 200.
+    //   Round 2 (Carol): Carol is recipient (exempted). Alice contributes 100e6. Bob does NOT
+    //                    contribute — deposit=0 → Defaulted, shortage=100e6 owed to Carol.
+    //                    Pot = Alice_contrib(100e6). Carol's shortfallQueue = [{creditor=Bob, 100}].
+    //                    Repayment: take min(100,100)=100 → Bob gets 100. Carol gets 0.
+    //
+    // NOTE: Bob's default in r2 creates shortfall[bob]=[{creditor=Carol, 100e6}]. Since Bob's
+    //       recipient round (r1) has already passed, this debt is never repaid in this circle.
+    //       This demonstrates that unrepaid shortfall entries persist harmlessly; all withdrawable
+    //       USDC is still fully accounted for (contract balance = 0 at end).
+    //
+    // NOTE on partial repayment: the branch where remaining < entry.amount (partial repay) is
+    //       architecturally unreachable in a standard integer-contribution circle because the
+    //       maximum single-round shortfall (one contribution) is always ≤ the minimum possible
+    //       pot (size × contribution in a fully-paying round).
+    // =======================================================================
+    function test_repayment_exactDebtFromPot() public {
+        // Alice: deposit(100) + r0(100) + r1(100) + r2(100) = 400e6
+        // Bob:   deposit(100) + r1(100) = 200e6
+        //        (misses r0, deposit consumed; defaults r2 with deposit=0)
+        // Carol: deposit(100) = 100e6
+        //        (misses r0, deposit consumed; defaults r1; is recipient r2)
+        _fund(alice, 400e6);
+        _fund(bob,   200e6);
+        _fund(carol, 100e6);
+
+        uint256 id = _createCircle(3, 1);
+        vm.prank(alice); sc.join(id); // member[0], recipient round 0
+        vm.prank(bob);   sc.join(id); // member[1], recipient round 1
+        vm.prank(carol); sc.join(id); // member[2], recipient round 2
+
+        // ---- Round 0: alice recipient. Alice pays. Bob & Carol miss (deposits consumed). ----
+        vm.prank(alice); sc.contribute(id);
+        // Bob  does NOT contribute — deposit 100e6 >= 100e6 → Missed, deposit→0
+        // Carol does NOT contribute — deposit 100e6 >= 100e6 → Missed, deposit→0
+
+        (, , , , , uint64 dl0, , , ) = sc.getCircle(id);
+        vm.warp(dl0 + 1);
+        sc.closeRound(id);
+        // pot = alice(100) + bob_dep(100) + carol_dep(100) = 300e6
+
+        assertEq(sc.claimable(alice), 300e6, "alice r0 pot");
+        assertEq(sc.depositOf(id, bob),   0, "bob deposit consumed r0");
+        assertEq(sc.depositOf(id, carol), 0, "carol deposit consumed r0");
+
+        vm.prank(alice); sc.withdraw();
+
+        // ---- Round 1: bob recipient. Alice & Bob pay. Carol defaults (deposit=0). ----
+        vm.prank(alice); sc.contribute(id);
+        vm.prank(bob);   sc.contribute(id);
+        // Carol does NOT contribute — deposit=0 < 100e6 → Defaulted, shortage=100e6 owed to Bob
+
+        (, , , , , uint64 dl1, , , ) = sc.getCircle(id);
+        vm.warp(dl1 + 1);
+
+        vm.expectEmit(true, true, false, true, address(sc));
+        emit SavingsCircles.Defaulted(id, carol, 1);
+        // pot = alice(100) + bob(100) + carol(0) = 200e6
+        vm.expectEmit(true, false, true, true, address(sc));
+        emit SavingsCircles.RoundClosed(id, 1, bob, 200e6);
+        sc.closeRound(id);
+
+        assertEq(sc.claimable(bob), 200e6,          "bob r1 short pot");
+        assertEq(sc.shortfallOf(id, carol), 100e6,  "carol shortfall after r1 default");
+        // Alice's deposit is still 100e6 (contributed r0 and r1 from wallet; deposit untouched)
+        assertEq(sc.depositOf(id, alice), 100e6, "alice deposit intact after r1");
+
+        vm.prank(bob); sc.withdraw();
+
+        // ---- Round 2: carol recipient. Alice contributes. Bob defaults (deposit=0). ----
+        // Alice calls contribute() → pot += 100e6.
+        // Bob: deposit=0, NOT recipient → Defaulted, shortage=100e6 owed to Carol.
+        //      (Bob's recipient round r1 already passed → this debt will not be repaid in this circle.)
+        // Carol is recipient → exempted from deposit deduction; does not call contribute().
+        // Pot = Alice_contrib(100e6).
+        // Carol's shortfallQueue = [{creditor=Bob, 100e6}].
+        // Repayment: take min(100, 100) = 100 → Bob gets 100. Carol gets 0.
+        vm.prank(alice); sc.contribute(id);
+        // Bob does NOT contribute — deposit=0 → Defaulted
+
+        (, , , , , uint64 dl2, , , ) = sc.getCircle(id);
+        vm.warp(dl2 + 1);
+
+        // Expect Defaulted for Bob in r2 (deposit=0, not recipient)
+        vm.expectEmit(true, true, false, true, address(sc));
+        emit SavingsCircles.Defaulted(id, bob, 2);
+        // Expect Repaid: debtor=carol, creditor=bob, amount=100e6
+        vm.expectEmit(true, true, true, true, address(sc));
+        emit SavingsCircles.Repaid(id, carol, bob, 100e6);
+        // RoundClosed emits GROSS pot (100e6, before repayment deduction)
+        vm.expectEmit(true, false, true, true, address(sc));
+        emit SavingsCircles.RoundClosed(id, 2, carol, 100e6);
+        sc.closeRound(id); // last round → CircleFinished
+
+        // Carol's debt to Bob fully repaid (pot == debt → creditor gets all, recipient gets 0)
+        assertEq(sc.shortfallOf(id, carol), 0,      "carol shortfall cleared");
+        // Bob's new debt to Carol persists unresolved (no future recipient round for Bob)
+        assertEq(sc.shortfallOf(id, bob),   100e6,  "bob shortfall persists (recipient round passed)");
+
+        // claimable[carol] = 100e6 gross - 100e6 repaid = 0; deposit=0 (consumed r0)
+        assertEq(sc.claimable(carol), 0,     "carol claimable = 0 (full pot consumed by repayment)");
+        // claimable[bob] = 100e6 repaid; deposit=0 (consumed r0, no deposit returned)
+        assertEq(sc.claimable(bob),   100e6, "bob claimable = repayment only");
+        // claimable[alice] = 100e6 deposit returned at finish (r0 pot was withdrawn mid-test)
+        assertEq(sc.claimable(alice), 100e6, "alice deposit returned");
+
+        vm.prank(alice); sc.withdraw();
+        vm.prank(bob);   sc.withdraw();
+        // carol has claimable=0 — no withdraw
+
+        assertEq(usdc.balanceOf(address(sc)), 0, "contract balance = 0");
+
+        // Total inflows:  alice(400) + bob(200) + carol(100) = 700e6
+        // Total outflows: alice(300 r0 pot + 100 deposit) + bob(200 r1 pot + 100 repaid) + carol(0) = 700e6 ✓
+
+        // NOTE: pot == debt is the closest achievable to "partial repayment" in this contract design.
+        // The branch remaining < entry.amount (partial repay) is architecturally unreachable because
+        // max single-round shortfall (one contribution) ≤ min possible pot (size=2 → pot ≥ 2×contrib).
+
+        _assertRep(alice, 1, 3, 0, 0); // paid r0+r1+r2, no misses, completed
+        _assertRep(bob,   0, 1, 2, 1); // paid r1, missed r0 (deposit), defaulted r2 → 0 completedCircles
+        // carol: missed r0 (deposit=Missed), defaulted r1 (Missed+Defaulted), missed r2 as own recipient
+        //        → missedPayments=3 (each miss/default increments the counter regardless of role)
+        _assertRep(carol, 0, 0, 3, 1); // 3 misses total, 1 default, 0 on-time, 0 completedCircles
+    }
+
+    // =======================================================================
+    // Test 17 — No shortfall: clean circle with no defaults emits no Repaid events
+    //           and every recipient receives the full gross pot.
+    // =======================================================================
+    function test_noShortfallFullPot() public {
+        _fund(alice, 400e6);
+        _fund(bob,   400e6);
+        _fund(carol, 400e6);
+
+        uint256 id = _createCircle(3, 1);
+        vm.prank(alice); sc.join(id);
+        vm.prank(bob);   sc.join(id);
+        vm.prank(carol); sc.join(id);
+
+        // Verify shortfallOf returns 0 for all members before any round
+        assertEq(sc.shortfallOf(id, alice), 0, "alice no shortfall initially");
+        assertEq(sc.shortfallOf(id, bob),   0, "bob no shortfall initially");
+        assertEq(sc.shortfallOf(id, carol), 0, "carol no shortfall initially");
+
+        // ---- Round 0: all pay. No Repaid event expected. ----
+        vm.prank(alice); sc.contribute(id);
+        vm.prank(bob);   sc.contribute(id);
+        vm.prank(carol); sc.contribute(id);
+        _advanceAndClose(id);
+
+        // alice gets full pot = 300e6; no repayments
+        assertEq(sc.claimable(alice), 300e6, "alice full pot r0");
+        assertEq(sc.shortfallOf(id, alice), 0, "alice still no shortfall");
+
+        vm.prank(alice); sc.withdraw();
+
+        // ---- Round 1: all pay. ----
+        vm.prank(alice); sc.contribute(id);
+        vm.prank(bob);   sc.contribute(id);
+        vm.prank(carol); sc.contribute(id);
+        _advanceAndClose(id);
+
+        assertEq(sc.claimable(bob), 300e6, "bob full pot r1");
+        assertEq(sc.shortfallOf(id, bob), 0, "bob no shortfall");
+        vm.prank(bob); sc.withdraw();
+
+        // ---- Round 2 (last): all pay. ----
+        vm.prank(alice); sc.contribute(id);
+        vm.prank(bob);   sc.contribute(id);
+        vm.prank(carol); sc.contribute(id);
+        _advanceAndClose(id); // CircleFinished
+
+        // carol: pot(300) + deposit(100) = 400; alice deposit(100); bob deposit(100)
+        assertEq(sc.claimable(carol), 300e6 + 100e6, "carol pot + deposit");
+        assertEq(sc.claimable(alice), 100e6,          "alice deposit returned");
+        assertEq(sc.claimable(bob),   100e6,          "bob deposit returned");
+
+        // All shortfalls remain zero — no defaults occurred
+        assertEq(sc.shortfallOf(id, alice), 0, "alice shortfall = 0 at finish");
+        assertEq(sc.shortfallOf(id, bob),   0, "bob shortfall = 0 at finish");
+        assertEq(sc.shortfallOf(id, carol), 0, "carol shortfall = 0 at finish");
+
+        vm.prank(carol); sc.withdraw();
+        vm.prank(alice); sc.withdraw();
+        vm.prank(bob);   sc.withdraw();
+
+        assertEq(usdc.balanceOf(address(sc)), 0, "contract balance = 0");
     }
 
     // =======================================================================

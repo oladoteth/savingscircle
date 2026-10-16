@@ -21,6 +21,11 @@ contract SavingsCircles is ReentrancyGuard {
         uint256 defaults;
     }
 
+    struct ShortfallEntry {
+        address creditor;
+        uint256 amount;
+    }
+
     struct Circle {
         uint256 contribution;
         uint64 roundLength;
@@ -35,6 +40,10 @@ contract SavingsCircles is ReentrancyGuard {
         mapping(uint8 => uint8) missCount;
         mapping(address => bool) isMember;
         mapping(address => bool) defaultedInCircle;
+        // Per member: total USDC they have shorted other recipients across all rounds in this circle.
+        mapping(address => uint256) shortfallOwed;
+        // Ordered list of shortfall creditors per debtor.
+        mapping(address => ShortfallEntry[]) shortfallQueue;
     }
 
     IERC20 public immutable usdc;
@@ -60,6 +69,7 @@ contract SavingsCircles is ReentrancyGuard {
     event Defaulted(uint256 indexed id, address indexed member, uint8 round);
     event RoundClosed(uint256 indexed id, uint8 round, address indexed recipient, uint256 amount);
     event CircleFinished(uint256 indexed id);
+    event Repaid(uint256 indexed id, address indexed debtor, address indexed creditor, uint256 amount);
     event Withdrawn(address indexed member, uint256 amount);
 
     error InvalidUSDC();
@@ -70,7 +80,6 @@ contract SavingsCircles is ReentrancyGuard {
     error CircleNotFound();
     error InvalidState();
     error AlreadyMember();
-    error CircleFull();
     error NotMember();
     error AlreadyPaid();
     error RoundClosedAlready();
@@ -114,7 +123,6 @@ contract SavingsCircles is ReentrancyGuard {
 
         if (circle.state != CircleState.Pending) revert InvalidState();
         if (circle.isMember[msg.sender]) revert AlreadyMember();
-        if (circle.members.length >= circle.size) revert CircleFull();
 
         circle.isMember[msg.sender] = true;
         circle.members.push(msg.sender);
@@ -188,6 +196,13 @@ contract SavingsCircles is ReentrancyGuard {
             } else {
                 pot += remainingDeposit;
                 circle.deposit[member] = 0;
+
+                uint256 shortage = contribution - remainingDeposit;
+                if (shortage > 0) {
+                    circle.shortfallOwed[member] += shortage;
+                    circle.shortfallQueue[member].push(ShortfallEntry({creditor: recipient, amount: shortage}));
+                }
+
                 emit Defaulted(id, member, round);
 
                 if (!circle.defaultedInCircle[member]) {
@@ -199,7 +214,21 @@ contract SavingsCircles is ReentrancyGuard {
 
         circle.missCount[round] = missedInRound;
 
-        claimable[recipient] += pot;
+        // Repay outstanding shortfalls from recipient's pot, oldest first
+        uint256 remaining = pot;
+        ShortfallEntry[] storage queue = circle.shortfallQueue[recipient];
+        uint256 qLen = queue.length;
+        for (uint256 j = 0; j < qLen && remaining > 0; ++j) {
+            ShortfallEntry storage entry = queue[j];
+            if (entry.amount == 0) continue;
+            uint256 repayAmt = remaining < entry.amount ? remaining : entry.amount;
+            entry.amount -= repayAmt;
+            circle.shortfallOwed[recipient] -= repayAmt;
+            remaining -= repayAmt;
+            claimable[entry.creditor] += repayAmt;
+            emit Repaid(id, recipient, entry.creditor, repayAmt);
+        }
+        claimable[recipient] += remaining;
 
         emit RoundClosed(id, round, recipient, pot);
 
@@ -291,6 +320,11 @@ contract SavingsCircles is ReentrancyGuard {
     function depositOf(uint256 id, address member) external view returns (uint256) {
         _requireCircleExists(id);
         return circles[id].deposit[member];
+    }
+
+    function shortfallOf(uint256 id, address member) external view returns (uint256) {
+        _requireCircleExists(id);
+        return circles[id].shortfallOwed[member];
     }
 
     function _requireCircleExists(uint256 id) internal view {

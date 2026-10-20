@@ -84,23 +84,34 @@ contract SavingsCirclesTest is Test {
     }
 
     /// Assert contract USDC balance == sum of all pots + all deposits + all claimable.
-    /// (This can only check the accounts we supply; caller must pass all relevant addresses.)
+    /// Uses the test's default `sc` instance and `usdc` token.
     function _assertBalanceInvariant(uint256[] memory ids, address[] memory accounts) internal view {
+        _assertBalanceInvariantOn(sc, usdc, ids, accounts);
+    }
+
+    /// Assert balance invariant on an arbitrary SavingsCircles + IERC20 pair.
+    /// Useful for tests that use a custom contract instance (reverting token, reentrant token).
+    function _assertBalanceInvariantOn(
+        SavingsCircles sc_,
+        IERC20 token_,
+        uint256[] memory ids,
+        address[] memory accounts
+    ) internal view {
         uint256 totalPot;
         for (uint256 i; i < ids.length; ++i) {
-            SavingsCircles.CircleView memory v = sc.getCircle(ids[i]);
+            SavingsCircles.CircleView memory v = sc_.getCircle(ids[i]);
             totalPot += v.pot;
             for (uint256 j; j < accounts.length; ++j) {
-                SavingsCircles.MemberInfo memory m = sc.memberInfo(ids[i], accounts[j]);
+                SavingsCircles.MemberInfo memory m = sc_.memberInfo(ids[i], accounts[j]);
                 totalPot += m.deposit;
             }
         }
         uint256 totalClaimable;
         for (uint256 j; j < accounts.length; ++j) {
-            totalClaimable += sc.claimable(accounts[j]);
+            totalClaimable += sc_.claimable(accounts[j]);
         }
         assertEq(
-            usdc.balanceOf(address(sc)),
+            token_.balanceOf(address(sc_)),
             totalPot + totalClaimable,
             "balance invariant violated"
         );
@@ -407,6 +418,11 @@ contract SavingsCirclesTest is Test {
 
         // Bob's owed is still non-zero
         assertTrue(scR.memberInfo(id, bob).owedNow > 0, "bob still owes");
+
+        // Balance invariant (using the custom scR / rtkn instance)
+        uint256[] memory ids = new uint256[](1); ids[0] = id;
+        address[] memory accs = new address[](3); accs[0] = alice; accs[1] = bob; accs[2] = carol;
+        _assertBalanceInvariantOn(scR, IERC20(address(rtkn)), ids, accs);
     }
 
     // =======================================================================
@@ -719,6 +735,11 @@ contract SavingsCirclesTest is Test {
         assertEq(cc_c, 2, "carol 2 cycles");
         assertEq(cc_d, 1, "dave 1 cycle");
         assertEq(cc_b, 1, "bob 1 cycle (left after)");
+
+        // Balance invariant — bob left so his deposit was returned; include him for claimable
+        uint256[] memory ids = new uint256[](1); ids[0] = id;
+        address[] memory accs = new address[](4); accs[0] = alice; accs[1] = bob; accs[2] = carol; accs[3] = dave;
+        _assertBalanceInvariant(ids, accs);
     }
 
     // =======================================================================
@@ -898,6 +919,11 @@ contract SavingsCirclesTest is Test {
         vm.prank(alice);
         vm.expectRevert(SavingsCircles.NothingToWithdraw.selector);
         sc.withdraw();
+
+        // Balance invariant: alice withdrew 300, bob and carol still have deposit+claimable locked
+        uint256[] memory ids = new uint256[](1); ids[0] = id;
+        address[] memory accs = new address[](3); accs[0] = alice; accs[1] = bob; accs[2] = carol;
+        _assertBalanceInvariant(ids, accs);
     }
 
     function test_withdrawReentrancy() public {
@@ -923,6 +949,11 @@ contract SavingsCirclesTest is Test {
         vm.prank(alice); scR.withdraw(); // inner re-entry is caught silently
         assertEq(rtkn.balanceOf(alice), balBefore + 300e6, "no double withdrawal");
         assertEq(scR.claimable(alice), 0, "claimable zero after reentrancy");
+
+        // Balance invariant on the reentrant-token instance
+        uint256[] memory ids = new uint256[](1); ids[0] = id;
+        address[] memory accs = new address[](3); accs[0] = alice; accs[1] = bob; accs[2] = carol;
+        _assertBalanceInvariantOn(scR, IERC20(address(rtkn)), ids, accs);
     }
 
     // =======================================================================
@@ -999,9 +1030,129 @@ contract SavingsCirclesTest is Test {
         vm.warp(uint256(cs) + 3 * PERIOD_LENGTH + 1);
         sc.settleCycle(id);
 
+        // pot MUST be zero after every settleCycle (covers finding 1 edge case)
+        assertEq(sc.getCircle(id).pot, 0, "pot zero after settle");
+
         // Balance invariant: contract USDC == all pots + all deposits + all claimable
         uint256[] memory ids = new uint256[](1); ids[0] = id;
         address[] memory accs = new address[](3); accs[0] = alice; accs[1] = bob; accs[2] = carol;
         _assertBalanceInvariant(ids, accs);
+    }
+
+    // =======================================================================
+    // Test 14 — CircleFull: outsider cannot join a full open circle; can join
+    //           after a member leaves.
+    // =======================================================================
+    function test_circleFull() public {
+        _fund(alice, 400e6);
+        _fund(bob,   400e6);
+        _fund(carol, 400e6);
+        _fund(dave,  400e6);
+
+        uint256 id = _createCircle(3, 1); // size = 3
+        vm.prank(alice); sc.join(id);
+        vm.prank(bob);   sc.join(id);
+        vm.prank(carol); sc.join(id);
+
+        // Circle is now full (3 of 3). Dave cannot join.
+        vm.prank(dave);
+        vm.expectRevert(SavingsCircles.CircleFull.selector);
+        sc.join(id);
+
+        // Alice leaves → one slot opens.
+        vm.prank(alice); sc.leave(id);
+        assertEq(sc.getCircle(id).memberCount, 2, "2 members after alice leaves");
+
+        // Dave can now join.
+        vm.prank(dave); sc.join(id);
+        assertEq(sc.getCircle(id).memberCount, 3, "3 members after dave joins");
+
+        // Balance invariant: alice's deposit was refunded to claimable.
+        uint256[] memory ids = new uint256[](1); ids[0] = id;
+        address[] memory accs = new address[](4); accs[0] = alice; accs[1] = bob; accs[2] = carol; accs[3] = dave;
+        _assertBalanceInvariant(ids, accs);
+    }
+
+    // =======================================================================
+    // Test 15 — removeUnfunded:
+    //   a) reverts before the grace period elapses.
+    //   b) reverts for a member whose deposit is full.
+    //   c) works after the grace period; removed member's deposit goes to
+    //      claimable; a new member can then join.
+    // =======================================================================
+    function test_removeUnfunded() public {
+        // Setup a 3-member circle. After cycle 1 fa's deposit is consumed (no default),
+        // then fa refuses to topUp. After one periodLength, anyone can removeUnfunded(fa).
+
+        address fa = makeAddr("fa_ru");
+        address fb = makeAddr("fb_ru");
+        address fc = makeAddr("fc_ru");
+        address newcomer = makeAddr("newcomer_ru");
+
+        // fa: deposit(200) only — 0 balance after joining (size=3, depositPeriods=2).
+        // fb, fc: deposit(200) + 3 contributions(300) + extra for cycle 2.
+        usdc.mint(fa, 200e6); vm.prank(fa); usdc.approve(address(sc), type(uint256).max);
+        usdc.mint(fb, 800e6); vm.prank(fb); usdc.approve(address(sc), type(uint256).max);
+        usdc.mint(fc, 800e6); vm.prank(fc); usdc.approve(address(sc), type(uint256).max);
+        usdc.mint(newcomer, 200e6); vm.prank(newcomer); usdc.approve(address(sc), type(uint256).max);
+
+        uint256 id = sc.createCircle(CONTRIBUTION, PERIOD_LENGTH, 3, 2, new address[](0));
+        vm.prank(fa); sc.join(id); // deposit=200, fa now has 0
+        vm.prank(fb); sc.join(id);
+        vm.prank(fc); sc.join(id);
+        sc.startCycle(id);
+        uint64 cs = sc.getCircle(id).cycleStart;
+
+        // fa has 0, misses all 3 periods. fb/fc pay everything.
+        // At period 2: fund fa for exactly 1 period so deposit covers exactly 2 missed.
+        vm.warp(uint256(cs) + 2 * PERIOD_LENGTH);
+        usdc.mint(fa, 100e6);
+        vm.prank(fa); sc.pay(id); // fa pays period 2; owed=200 at settle → deposit covers
+
+        vm.warp(uint256(cs) + 3 * PERIOD_LENGTH + 1);
+        sc.collect(id);
+        vm.prank(fb); sc.request(id);
+        vm.prank(fc); sc.request(id);
+        sc.settleCycle(id);
+
+        // fa still member, deposit=0 (consumed by settlement)
+        assertTrue(sc.memberInfo(id, fa).isMember, "fa still member");
+        assertEq(sc.memberInfo(id, fa).deposit, 0, "fa deposit=0");
+        assertEq(sc.getCircle(id).settledAt, uint64(block.timestamp), "settledAt updated");
+
+        // (a) Grace period not elapsed: removeUnfunded reverts immediately after settle.
+        vm.expectRevert(SavingsCircles.GracePeriodNotElapsed.selector);
+        sc.removeUnfunded(id, fa);
+
+        // (b) Full-deposit member (fb) cannot be removed even after grace period.
+        vm.warp(block.timestamp + PERIOD_LENGTH + 1);
+        vm.expectRevert(SavingsCircles.DepositAlreadyFull.selector);
+        sc.removeUnfunded(id, fb);
+
+        // (c) After grace period: fa can be removed by anyone.
+        sc.removeUnfunded(id, fa); // no revert
+
+        // fa removed
+        assertFalse(sc.memberInfo(id, fa).isMember, "fa removed");
+        assertEq(sc.getCircle(id).memberCount, 2, "2 members remain");
+        // fa was paid in tier1 of settleCycle.
+        // Pot at settle dispatch = fa.contribution(100 from period-2 pay) + fb(300) + fc(300)
+        //   - fb.request(300) - fc.request(300) + fa.deposit(200 deducted for arrears)
+        //   = 700 - 600 + 200 = ... let's track the actual pot:
+        //   After explicit collect at cs+3PL+1: fb+fc pay 300 each → pot = 700 (fa's 100 + 600).
+        //   fb.request: pot = 400. fc.request: pot = 100.
+        //   settleCycle: fa owes 200, deposit 200 covers → pot += 200 = 300.
+        //   tier1: fa only. share = min(payout=300, pot=300) = 300. fa gets 300.
+        // After removeUnfunded fa's deposit was already 0, so no additional credit.
+        assertEq(sc.claimable(fa), 300e6, "fa claimable = 300 from settle tier1");
+
+        // newcomer can now join
+        vm.prank(newcomer); sc.join(id);
+        assertEq(sc.getCircle(id).memberCount, 3, "newcomer joined");
+
+        // Balance invariant
+        uint256[] memory ids2 = new uint256[](1); ids2[0] = id;
+        address[] memory accs2 = new address[](4); accs2[0] = fa; accs2[1] = fb; accs2[2] = fc; accs2[3] = newcomer;
+        _assertBalanceInvariant(ids2, accs2);
     }
 }

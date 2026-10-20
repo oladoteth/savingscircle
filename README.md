@@ -1,6 +1,6 @@
 # Savings Circle
 
-A permissionless on-demand ROSCA (ajo, tanda, susu) where the contract holds the money. Members save together on autopay. There is no fixed payout schedule: any member can request the payout when they need it, as long as they have no arrears and the pot holds enough. Everyone pays the same; each cycle one payout is taken. A new cycle starts after settlement.
+A permissionless on-demand ROSCA (ajo, tanda, susu) where the contract holds the money. Members save together on autopay. There is no fixed payout schedule: **each member can take the payout once per cycle, whenever they need it**, as long as they have zero arrears and the pot holds enough. Everyone pays the same contribution per period. A new cycle starts after settlement once all deposits are full.
 
 ## Deployed contract
 
@@ -51,7 +51,7 @@ A circle is either **Pending** (forming or between cycles) or **Active** (cycle 
 ### Running (Active)
 - **Contributions are on autopay.** Anyone can call `collect(id)` at any time; it pulls as many whole contributions as each member's balance and allowance allow, up to what is owed. One member's transfer failure never reverts the call for others.
 - **Manual pay.** Members can also call `pay(id)` to pay just their own owed amount.
-- **Request payout.** Any member with zero arrears can call `request(id)` if `pot >= payout`. The first valid call wins; `claimable[member] += payout`.
+- **Request payout.** Any member with zero arrears can call `request(id)` if `pot >= payout`. Each member may take the payout **once per cycle**; `takenThisCycle[member]` prevents double-claiming. Multiple members can each take one payout per cycle as the pot refills across periods.
 - **Settle.** After `size × periodLength` seconds anyone can call `settleCycle(id)`. It:
   - Collects remaining owed amounts.
   - Deducts arrears from deposits. If a deposit can't cover them, the member **defaults** and is removed.
@@ -76,15 +76,20 @@ Per-address counters: `cyclesCompleted`, `onTimePayments`, `latePayments`, `miss
 
 On-chain reputation counters are not Sybil-resistant. A person controlling multiple wallets can build a record at low cost. Treat on-chain reputation as one signal alongside personal trust and social context.
 
+## removeUnfunded
+
+If a member's deposit was partially consumed by a settlement and they refuse to call `topUp`, any participant can call `removeUnfunded(id, member)` after at least one `periodLength` has elapsed since the last `settleCycle`. This credits the member's remaining deposit to `claimable` and removes them, unblocking the next cycle.
+
 ## Security review findings (v2 contract)
 
-Three findings were reported; no code was changed yet:
+Four findings were identified; three fixed in this release:
 
-| Severity | Finding |
-|---|---|
-| Critical | `settleCycle` pot-zero reset can strand arrears-deducted USDC when all members already took the payout mid-cycle |
-| High | Multiple members can take the payout in one cycle (pot refills via contributions across periods) |
-| High | Single non-cooperative member can stall `startCycle` indefinitely by refusing to `topUp` |
+| Severity | Finding | Status |
+|---|---|---|
+| Critical | `settleCycle` could strand USDC when all members took mid-cycle | Fixed |
+| High | Multiple members taking payout per cycle | By design |
+| High | Member could stall `startCycle` indefinitely | Fixed (`removeUnfunded`) |
+| Medium | `join()` allowed joining a full circle | Fixed (`CircleFull` guard) |
 
 See `docs/security-review-v2.md` for full details.
 

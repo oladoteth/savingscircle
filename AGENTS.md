@@ -8,7 +8,7 @@ This is the **project memory** - what Arc Studio remembers about building this a
 
 ## What This App Does
 
-An on-demand ROSCA (ajo, tanda, susu) on Arc. Members save together with autopay contributions. There is no fixed payout schedule — any member with zero arrears can request the payout when they need it, provided the pot holds enough. Each cycle exactly one payout is taken. After settlement the circle returns to Pending for the next cycle.
+An on-demand ROSCA (ajo, tanda, susu) on Arc. Members save together with autopay contributions. There is no fixed payout schedule — each member can take the payout **once per cycle**, whenever they need it, provided they have zero arrears and the pot holds enough. Multiple members may each take one payout per cycle as the pot refills across periods. After settlement the circle returns to Pending for the next cycle.
 
 ## Deployed Contracts
 
@@ -38,6 +38,7 @@ An on-demand ROSCA (ajo, tanda, susu) on Arc. Members save together with autopay
 - `leave(id)` — credits remaining deposit to `claimable`, removes member.
 - `topUp(id)` — pulls the shortfall to bring deposit back to full. Required after settlement deducted from a deposit.
 - `startCycle(id)` — anyone, when `memberCount == size` and every deposit is full. Sets `cycleStart = block.timestamp`, increments `cycle`.
+- `removeUnfunded(id, member)` — anyone, Pending only, after at least one `periodLength` elapsed since last `settleCycle` (`settledAt`). Removes a member whose deposit is below full; credits remaining deposit to `claimable`. Prevents one non-cooperative member stalling the circle indefinitely.
 
 ### Cycle mechanics
 
@@ -45,7 +46,7 @@ Periods: t = 0 to size−1. Contribution for period t is due at `cycleStart + t 
 
 - `collect(id)` — pulls owed whole contributions for every member (try/catch, never reverts for callers). Late vs on-time classified per period boundary.
 - `pay(id)` — same as collect but for `msg.sender` only.
-- `request(id)` — member only, Active only. Runs collect first. Reverts: `AlreadyTaken`, `HasArrears`, `PotTooSmall`. Credits `claimable[msg.sender] += payout`, marks `takenThisCycle`.
+- `request(id)` — member only, Active only. Runs collect first. Reverts: `AlreadyTaken`, `HasArrears`, `PotTooSmall`. Credits `claimable[msg.sender] += payout`, marks `takenThisCycle`. **Each member may call this once per cycle**; `takenThisCycle[member]` is the correct guard. Multiple members can take one payout each per cycle.
 - `settleCycle(id)` — anyone, after `cycleStart + size × periodLength`. Collects remaining owed, deducts deposits (default if insufficient), pays tier1 (non-defaulters) then tier2 (defaulters), removes defaulters, resets per-cycle data, → Pending.
 
 ### Reputation per address
@@ -58,36 +59,39 @@ Periods: t = 0 to size−1. Contribution for period t is due at `cycleStart + t 
 
 ### Tests
 
-16 tests, all passing (`forge test`). Run with `bun run contracts:test`.
+18 tests, all passing (`forge test`). Run with `bun run contracts:test`.
 
 | # | Test function | Covers |
 |---|---|---|
 | 1 | `test_happyPath` | Full cycle, payouts out of join order, balance invariant |
 | 2 | `test_requestReverts` | PotTooSmall, AlreadyTaken, HasArrears, NotMember, not Active |
 | 3 | `test_emptyWalletThenLate` | Collect skips zero-balance; next collect pulls arrears as late |
-| 4 | `test_revertingTokenSkippedInCollect` | Reverting token skipped; others succeed |
+| 4 | `test_revertingTokenSkippedInCollect` | Reverting token skipped; others succeed; invariant |
 | 5 | `test_allowanceTooLow` | Low-allowance member skipped; others collected |
 | 6 | `test_depositPeriodsSizeMinusOne_noDefault` | depositPeriods=size−1; Alice takes early, no default, Bob+Carol get full payout |
 | 7 | `test_depositPeriods1_defaultAndRemoval` | depositPeriods=1; Alice defaults, Bob+Carol each get 250e6 (2.5 contributions) |
 | 8 | `test_settleTooEarly` | TooEarlyToSettle revert; exact boundary succeeds |
-| 9 | `test_secondCycle` | Leave+join+topUp between cycles; cyclesCompleted increments |
+| 9 | `test_secondCycle` | Leave+join+topUp between cycles; cyclesCompleted increments; invariant |
 | 10a | `test_startCycleNotEnoughAndActiveReverts` | NotEnoughMembers; join/leave while Active revert |
 | 10b | `test_depositNotFull` | DepositNotFull blocks startCycle; topUp restores it |
 | 11 | `test_inviteList` | Uninvited revert; invited works; InviteListTooShort revert |
-| 12 | `test_withdraw` | Exact amount; second call reverts NothingToWithdraw |
-| 12b | `test_withdrawReentrancy` | Reentrant token cannot double-withdraw |
+| 12 | `test_withdraw` | Exact amount; second call reverts NothingToWithdraw; invariant |
+| 12b | `test_withdrawReentrancy` | Reentrant token cannot double-withdraw; invariant |
 | 13a | `testFuzz_createCircleParams` | Valid params never revert; stored correctly |
-| 13b | `testFuzz_balanceInvariant` | Random pay/miss patterns; balance invariant holds |
+| 13b | `testFuzz_balanceInvariant` | Random pay/miss patterns; pot==0 after settle; balance invariant |
+| 14 | `test_circleFull` | CircleFull revert on full open circle; slot opens after leave |
+| 15 | `test_removeUnfunded` | Grace period reverts; full-deposit revert; removal works; newcomer joins |
 
-### Security review findings (v2, 2026-10-20)
+### Security review findings (v2, updated 2026-10-20)
 
-Three findings from the functional review. Rule-corpus review returned no findings. Full report: `docs/security-review-v2.md`. No code was changed.
+Four findings total. Full report: `docs/security-review-v2.md`.
 
-| Severity | Finding |
-|---|---|
-| Critical | `settleCycle` pot-zero reset can strand funds when all members took the payout mid-cycle |
-| High | Multiple members can take the payout in one cycle (pot refills between collect calls) |
-| High | One member can stall `startCycle` indefinitely by refusing to `topUp` |
+| Severity | Finding | Status |
+|---|---|---|
+| Critical | `settleCycle` could strand USDC when all members took mid-cycle | Fixed |
+| High | Multiple members can take the payout in one cycle | By design |
+| High | One member can stall `startCycle` indefinitely by refusing to `topUp` | Fixed (`removeUnfunded`) |
+| Medium | `join()` allowed joining a full circle | Fixed (`CircleFull` guard) |
 
 ### Known limitation: reputation farming
 

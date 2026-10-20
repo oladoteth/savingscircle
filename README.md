@@ -1,119 +1,97 @@
-# SavingsCircles
+# Savings Circle
 
-A trustless rotating savings circle (ROSCA) on Arc. Known as ajo, tanda, or susu depending on where you grew up: a fixed group of people each contribute the same amount every round, and one member per round takes the whole pot, cycling through everyone until each person has received once.
+A permissionless on-demand ROSCA (ajo, tanda, susu) where the contract holds the money. Members save together on autopay. There is no fixed payout schedule: any member can request the payout when they need it, as long as they have no arrears and the pot holds enough. Everyone pays the same; each cycle one payout is taken. A new cycle starts after settlement.
 
-This contract replaces the person who normally holds the money.
+## Deployed contract
 
----
+| Network | Address |
+|---|---|
+| Arc Testnet | [0xe4a39b29fee8942eafed5798105ae8982b0662f5](https://explorer.testnet.arc.io/address/0xe4a39b29fee8942eafed5798105ae8982b0662f5) |
+
+> The contract above is the previous (v1) deployment. The v2 contract (on-demand payout model) has not yet been re-deployed. Run `bun run contracts:deploy` or use Arc Studio's deploy flow to deploy the updated contract and update `src/appConfig.ts`.
+
+## Running the app
+
+```bash
+bun install
+bun run dev
+```
+
+Open `http://localhost:5173` in your browser. Connect a wallet (MetaMask or any injected wallet). Use the **Get test USDC** button in the Arc Studio sidebar to get testnet USDC on Arc Testnet.
+
+## Switching to Arc Mainnet
+
+Edit **`src/appConfig.ts`** only — no other file needs to change:
+
+```ts
+export const CHAIN_ID = 5042;
+export const USDC_ADDRESS = '0x3600000000000000000000000000000000000000';
+export const CONTRACT_ADDRESS = '<your mainnet contract address>';
+export const EXPLORER_BASE = 'https://explorer.arc.io';
+export const RPC_URL = 'https://rpc.mainnet.arc.io';
+export const CHAIN_NAME = 'Arc';
+```
+
+Then deploy a new `SavingsCircles` contract to Arc Mainnet passing `0x3600000000000000000000000000000000000000` as the constructor argument. Fill in the resulting address as `CONTRACT_ADDRESS`.
+
+> **Warning:** mainnet uses real funds. Have the contract independently audited before deploying.
 
 ## How it works
 
-1. Anyone calls `createCircle` to define a contribution amount, round length, group size, and deposit requirement.
-2. Members `join` — each one locks up `depositRounds × contribution` as a deposit and joins the payout queue in join order.
-3. Once the group is full the circle starts automatically. Each round, members call `contribute` before the deadline.
-4. Anyone calls `closeRound` after the deadline. The contract tallies what was paid, handles missed payments from deposits, and credits the round's recipient.
-5. Members call `withdraw` at any time to collect their claimable balance.
+### States
+A circle is either **Pending** (forming or between cycles) or **Active** (cycle running).
 
-Payout is always pull-based. Transfers are never pushed to recipients — a blocklisted USDC address cannot freeze the circle for everyone else.
+### Forming (Pending)
+1. **Create** — set contribution per period, period length (seconds; use minutes for demos, days for production), number of members (2–20), `depositPeriods` (1 to size−1), and an optional invite list.
+2. **Join** — pay the deposit (`depositPeriods × contribution`). **Deposits stay locked for the life of the circle** — they are returned only when you call `leave()` or are removed after a default. They are NOT returned at cycle end.
+3. **Leave** (Pending only) — credits your remaining deposit to `claimable` and removes you from the circle.
+4. **TopUp** — if a previous cycle's settlement deducted from your deposit, top it back up to the full amount before the next cycle can start.
+5. **Start cycle** — anyone can call `startCycle` once every slot is filled and every deposit is full.
 
----
+### Running (Active)
+- **Contributions are on autopay.** Anyone can call `collect(id)` at any time; it pulls as many whole contributions as each member's balance and allowance allow, up to what is owed. One member's transfer failure never reverts the call for others.
+- **Manual pay.** Members can also call `pay(id)` to pay just their own owed amount.
+- **Request payout.** Any member with zero arrears can call `request(id)` if `pot >= payout`. The first valid call wins; `claimable[member] += payout`.
+- **Settle.** After `size × periodLength` seconds anyone can call `settleCycle(id)`. It:
+  - Collects remaining owed amounts.
+  - Deducts arrears from deposits. If a deposit can't cover them, the member **defaults** and is removed.
+  - Pays out tier 1 (non-defaulters who haven't taken the payout) and then tier 2 (defaulters).
+  - Returns to Pending.
 
-## Key parameters
+### Withdraw
+`withdraw()` transfers your entire `claimable` balance to you at any time.
 
-| Parameter | Meaning |
-|---|---|
-| `contribution` | Amount each member pays per round (USDC, 6 decimals) |
-| `roundLength` | Duration of each round in seconds |
-| `size` | Number of members (2–20) |
-| `depositRounds` | Number of rounds pre-funded as deposit at join time (1 to size−1) |
-| `invited` | Optional whitelist of addresses allowed to join; pass `[]` for open circles |
+## depositPeriods tradeoff
 
-### The depositRounds tradeoff
-
-- **`depositRounds = 1`** — low barrier, trust-based. Members lock one round's worth. If someone defaults, the pot for that round is short.
-- **`depositRounds = size − 1`** — maximum collateral. Each member pre-funds all rounds except their own recipient round. As long as no one exhausts their deposit, every later recipient gets the full pot even if an earlier recipient stops paying.
-
----
-
-## Missed payments and defaults
-
-- A non-recipient who misses has their deposit deducted to cover the shortfall. If the deposit covers it: `Missed` event, deposit reduced.
-- If the deposit runs out: `Defaulted` event, remaining deposit goes to the pot, and a shortfall debt is recorded.
-- When a defaulter later becomes the recipient, their pot repays their oldest debts first before crediting them the remainder.
-- A recipient who misses their own round faces no deposit deduction — the pot is simply short by one contribution.
-
----
+| depositPeriods | Deposit | Guarantee |
+|---|---|---|
+| 1 (minimum) | 1 × contribution | Low barrier; one missed period covered. Members who take early and stop paying will eventually default; the pot at settle may be short. |
+| size−1 (maximum) | (size−1) × contribution | Any member who takes the payout in period 0 and never pays again has enough deposit to cover all remaining periods. Every other member still receives the full payout. |
 
 ## Reputation
 
-Each address accumulates `completedCircles`, `onTimePayments`, `missedPayments`, and `defaults` across all circles. Members who defaulted in a circle do not receive `completedCircles` credit for it.
+Per-address counters: `cyclesCompleted`, `onTimePayments`, `latePayments`, `missedPayments`, `defaults`. A contribution pulled during the period it is due counts as on-time; one pulled for a prior period counts as late.
 
-> **Known limitation:** Reputation counters are not Sybil-resistant. A single person controlling multiple wallets can inflate their scores by running small circles between those wallets at low cost. Treat on-chain reputation as a weak signal and combine it with off-chain trust and social context.
+### Known limitation: reputation farming
 
----
+On-chain reputation counters are not Sybil-resistant. A person controlling multiple wallets can build a record at low cost. Treat on-chain reputation as one signal alongside personal trust and social context.
 
-## Contract interface
+## Security review findings (v2 contract)
 
-```solidity
-// Create a circle
-createCircle(uint256 contribution, uint64 roundLength, uint8 size, uint8 depositRounds, address[] calldata invited)
-    returns (uint256 id)
+Three findings were reported; no code was changed yet:
 
-// Join (locks depositRounds × contribution)
-join(uint256 id)
+| Severity | Finding |
+|---|---|
+| Critical | `settleCycle` pot-zero reset can strand arrears-deducted USDC when all members already took the payout mid-cycle |
+| High | Multiple members can take the payout in one cycle (pot refills via contributions across periods) |
+| High | Single non-cooperative member can stall `startCycle` indefinitely by refusing to `topUp` |
 
-// Leave before the circle starts (refunds deposit to claimable)
-leave(uint256 id)
-
-// Pay into the current round
-contribute(uint256 id)
-
-// Close the round after its deadline (permissionless)
-closeRound(uint256 id)
-
-// Collect claimable balance
-withdraw()
-
-// Views
-getCircle(id)          // circle metadata + live pot
-getMembers(id)         // member list in join order
-hasPaid(id, round, member)
-depositOf(id, member)
-shortfallOf(id, member)
-isInvited(id, member)
-claimable(address)
-reputation(address)
-```
-
----
-
-## Events
-
-`CircleCreated`, `Joined`, `Left`, `CircleStarted`, `Contributed`, `Missed`, `Defaulted`, `RoundClosed`, `CircleFinished`, `Repaid`, `Withdrawn`
-
----
+See `docs/security-review-v2.md` for full details.
 
 ## Development
 
 ```bash
-# Install dependencies
-bun install
-
-# Build contracts
 bun run contracts:build   # forge build
-
-# Run tests
-bun run contracts:test    # forge test
+bun run contracts:test    # forge test (16 tests)
+bun run check             # lint + typecheck
 ```
-
-Requires [Foundry](https://getfoundry.sh/). USDC address on Arc: `0x3600000000000000000000000000000000000000`.
-
----
-
-## Security
-
-- No owner, admin, pause, or upgrade path. No function can move funds except `withdraw()`, which only sends `claimable[msg.sender]` to `msg.sender`.
-- `ReentrancyGuard` on all state-changing functions.
-- `SafeERC20` for all token transfers.
-- No `msg.value` or native balance usage anywhere.
-- This code has not been professionally audited. Use at your own risk.

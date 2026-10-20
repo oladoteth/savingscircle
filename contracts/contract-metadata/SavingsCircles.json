@@ -1,13 +1,20 @@
 {
-  "contractAddress": "0xe4a39b29fee8942eafed5798105ae8982b0662f5",
+  "contractAddress": "0x74d6003369836212d5d8685082ab3e89b9809c2f",
   "network": "ARC-TESTNET",
   "deployerWalletId": "3c2464b2-8369-52e2-a782-800bbeca5396",
   "contract_code_path": "/home/user/app/contracts/SavingsCircles.sol",
   "contract_compiled_code_path": "/home/user/app/contracts/out/SavingsCircles.sol/SavingsCircles.json",
   "contract_network_and_links": {
-    "Arc Testnet": "https://explorer.testnet.arc.io/address/0xe4a39b29fee8942eafed5798105ae8982b0662f5"
+    "Arc Testnet": "https://explorer.testnet.arc.io/address/0x74d6003369836212d5d8685082ab3e89b9809c2f"
   },
   "contract_deployments": [
+    {
+      "chain": "Arc Testnet",
+      "address": "0x74d6003369836212d5d8685082ab3e89b9809c2f",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x74d6003369836212d5d8685082ab3e89b9809c2f",
+      "txHash": "0x4394f9f362470a196a7bd3382c7be97fe9661318690546e94f7f215356c8a2b1",
+      "deployedAt": "2026-10-20T11:30:44.167Z"
+    },
     {
       "chain": "Arc Testnet",
       "address": "0xe4a39b29fee8942eafed5798105ae8982b0662f5",
@@ -49,20 +56,7 @@
     },
     {
       "type": "function",
-      "name": "closeRound",
-      "inputs": [
-        {
-          "name": "id",
-          "type": "uint256",
-          "internalType": "uint256"
-        }
-      ],
-      "outputs": [],
-      "stateMutability": "nonpayable"
-    },
-    {
-      "type": "function",
-      "name": "contribute",
+      "name": "collect",
       "inputs": [
         {
           "name": "id",
@@ -83,7 +77,7 @@
           "internalType": "uint256"
         },
         {
-          "name": "roundLength",
+          "name": "periodLength",
           "type": "uint64",
           "internalType": "uint64"
         },
@@ -93,7 +87,7 @@
           "internalType": "uint8"
         },
         {
-          "name": "depositRounds",
+          "name": "depositPeriods",
           "type": "uint8",
           "internalType": "uint8"
         },
@@ -114,30 +108,6 @@
     },
     {
       "type": "function",
-      "name": "depositOf",
-      "inputs": [
-        {
-          "name": "id",
-          "type": "uint256",
-          "internalType": "uint256"
-        },
-        {
-          "name": "member",
-          "type": "address",
-          "internalType": "address"
-        }
-      ],
-      "outputs": [
-        {
-          "name": "",
-          "type": "uint256",
-          "internalType": "uint256"
-        }
-      ],
-      "stateMutability": "view"
-    },
-    {
-      "type": "function",
       "name": "getCircle",
       "inputs": [
         {
@@ -148,49 +118,76 @@
       ],
       "outputs": [
         {
-          "name": "contribution",
-          "type": "uint256",
-          "internalType": "uint256"
-        },
-        {
-          "name": "roundLength",
-          "type": "uint64",
-          "internalType": "uint64"
-        },
-        {
-          "name": "size",
-          "type": "uint8",
-          "internalType": "uint8"
-        },
-        {
-          "name": "memberCount",
-          "type": "uint8",
-          "internalType": "uint8"
-        },
-        {
-          "name": "currentRound",
-          "type": "uint8",
-          "internalType": "uint8"
-        },
-        {
-          "name": "deadline",
-          "type": "uint64",
-          "internalType": "uint64"
-        },
-        {
-          "name": "state",
-          "type": "uint8",
-          "internalType": "enum SavingsCircles.CircleState"
-        },
-        {
-          "name": "depositRounds",
-          "type": "uint8",
-          "internalType": "uint8"
-        },
-        {
-          "name": "potForCurrentRound",
-          "type": "uint256",
-          "internalType": "uint256"
+          "name": "v",
+          "type": "tuple",
+          "internalType": "struct SavingsCircles.CircleView",
+          "components": [
+            {
+              "name": "contribution",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "periodLength",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
+              "name": "size",
+              "type": "uint8",
+              "internalType": "uint8"
+            },
+            {
+              "name": "depositPeriods",
+              "type": "uint8",
+              "internalType": "uint8"
+            },
+            {
+              "name": "payout",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "memberCount",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "state",
+              "type": "uint8",
+              "internalType": "enum SavingsCircles.CircleState"
+            },
+            {
+              "name": "cycle",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "cycleStart",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
+              "name": "settledAt",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
+              "name": "currentPeriod",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "nextDueTime",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
+              "name": "pot",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ]
         }
       ],
       "stateMutability": "view"
@@ -210,35 +207,6 @@
           "name": "",
           "type": "address[]",
           "internalType": "address[]"
-        }
-      ],
-      "stateMutability": "view"
-    },
-    {
-      "type": "function",
-      "name": "hasPaid",
-      "inputs": [
-        {
-          "name": "id",
-          "type": "uint256",
-          "internalType": "uint256"
-        },
-        {
-          "name": "round",
-          "type": "uint8",
-          "internalType": "uint8"
-        },
-        {
-          "name": "member",
-          "type": "address",
-          "internalType": "address"
-        }
-      ],
-      "outputs": [
-        {
-          "name": "",
-          "type": "bool",
-          "internalType": "bool"
         }
       ],
       "stateMutability": "view"
@@ -295,6 +263,57 @@
     },
     {
       "type": "function",
+      "name": "memberInfo",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "member",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "m",
+          "type": "tuple",
+          "internalType": "struct SavingsCircles.MemberInfo",
+          "components": [
+            {
+              "name": "deposit",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "paidThisCycle",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "owedNow",
+              "type": "uint256",
+              "internalType": "uint256"
+            },
+            {
+              "name": "takenThisCycle",
+              "type": "bool",
+              "internalType": "bool"
+            },
+            {
+              "name": "isMember",
+              "type": "bool",
+              "internalType": "bool"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
       "name": "nextCircleId",
       "inputs": [],
       "outputs": [
@@ -308,6 +327,37 @@
     },
     {
       "type": "function",
+      "name": "pay",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "removeUnfunded",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "member",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
       "name": "reputation",
       "inputs": [
         {
@@ -318,12 +368,17 @@
       ],
       "outputs": [
         {
-          "name": "completedCircles",
+          "name": "cyclesCompleted",
           "type": "uint256",
           "internalType": "uint256"
         },
         {
           "name": "onTimePayments",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "latePayments",
           "type": "uint256",
           "internalType": "uint256"
         },
@@ -342,27 +397,55 @@
     },
     {
       "type": "function",
-      "name": "shortfallOf",
+      "name": "request",
       "inputs": [
         {
           "name": "id",
           "type": "uint256",
           "internalType": "uint256"
-        },
-        {
-          "name": "member",
-          "type": "address",
-          "internalType": "address"
         }
       ],
-      "outputs": [
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "settleCycle",
+      "inputs": [
         {
-          "name": "",
+          "name": "id",
           "type": "uint256",
           "internalType": "uint256"
         }
       ],
-      "stateMutability": "view"
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "startCycle",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "topUp",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
     },
     {
       "type": "function",
@@ -407,7 +490,7 @@
           "internalType": "uint256"
         },
         {
-          "name": "roundLength",
+          "name": "periodLength",
           "type": "uint64",
           "indexed": false,
           "internalType": "uint64"
@@ -419,7 +502,7 @@
           "internalType": "uint8"
         },
         {
-          "name": "depositRounds",
+          "name": "depositPeriods",
           "type": "uint8",
           "indexed": false,
           "internalType": "uint8"
@@ -435,39 +518,7 @@
     },
     {
       "type": "event",
-      "name": "CircleFinished",
-      "inputs": [
-        {
-          "name": "id",
-          "type": "uint256",
-          "indexed": true,
-          "internalType": "uint256"
-        }
-      ],
-      "anonymous": false
-    },
-    {
-      "type": "event",
-      "name": "CircleStarted",
-      "inputs": [
-        {
-          "name": "id",
-          "type": "uint256",
-          "indexed": true,
-          "internalType": "uint256"
-        },
-        {
-          "name": "deadline",
-          "type": "uint64",
-          "indexed": false,
-          "internalType": "uint64"
-        }
-      ],
-      "anonymous": false
-    },
-    {
-      "type": "event",
-      "name": "Contributed",
+      "name": "Collected",
       "inputs": [
         {
           "name": "id",
@@ -482,10 +533,60 @@
           "internalType": "address"
         },
         {
-          "name": "round",
-          "type": "uint8",
+          "name": "amount",
+          "type": "uint256",
           "indexed": false,
-          "internalType": "uint8"
+          "internalType": "uint256"
+        },
+        {
+          "name": "lateCount",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "CycleSettled",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "cycle",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "CycleStarted",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "cycle",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "cycleStart",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
         }
       ],
       "anonymous": false
@@ -505,12 +606,6 @@
           "type": "address",
           "indexed": true,
           "internalType": "address"
-        },
-        {
-          "name": "round",
-          "type": "uint8",
-          "indexed": false,
-          "internalType": "uint8"
         }
       ],
       "anonymous": false
@@ -576,38 +671,7 @@
           "internalType": "address"
         },
         {
-          "name": "round",
-          "type": "uint8",
-          "indexed": false,
-          "internalType": "uint8"
-        }
-      ],
-      "anonymous": false
-    },
-    {
-      "type": "event",
-      "name": "Repaid",
-      "inputs": [
-        {
-          "name": "id",
-          "type": "uint256",
-          "indexed": true,
-          "internalType": "uint256"
-        },
-        {
-          "name": "debtor",
-          "type": "address",
-          "indexed": true,
-          "internalType": "address"
-        },
-        {
-          "name": "creditor",
-          "type": "address",
-          "indexed": true,
-          "internalType": "address"
-        },
-        {
-          "name": "amount",
+          "name": "owedRemaining",
           "type": "uint256",
           "indexed": false,
           "internalType": "uint256"
@@ -617,7 +681,7 @@
     },
     {
       "type": "event",
-      "name": "RoundClosed",
+      "name": "PayoutTaken",
       "inputs": [
         {
           "name": "id",
@@ -626,13 +690,57 @@
           "internalType": "uint256"
         },
         {
-          "name": "round",
-          "type": "uint8",
+          "name": "cycle",
+          "type": "uint32",
           "indexed": false,
-          "internalType": "uint8"
+          "internalType": "uint32"
         },
         {
-          "name": "recipient",
+          "name": "member",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "payout",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "Removed",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "member",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "ToppedUp",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "member",
           "type": "address",
           "indexed": true,
           "internalType": "address"
@@ -672,7 +780,12 @@
     },
     {
       "type": "error",
-      "name": "AlreadyPaid",
+      "name": "AlreadyTaken",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "CircleFull",
       "inputs": []
     },
     {
@@ -682,17 +795,37 @@
     },
     {
       "type": "error",
+      "name": "DepositAlreadyFull",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "DepositNotFull",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "GracePeriodNotElapsed",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "HasArrears",
+      "inputs": []
+    },
+    {
+      "type": "error",
       "name": "InvalidContribution",
       "inputs": []
     },
     {
       "type": "error",
-      "name": "InvalidDepositRounds",
+      "name": "InvalidDepositPeriods",
       "inputs": []
     },
     {
       "type": "error",
-      "name": "InvalidRoundLength",
+      "name": "InvalidPeriodLength",
       "inputs": []
     },
     {
@@ -717,6 +850,11 @@
     },
     {
       "type": "error",
+      "name": "NotEnoughMembers",
+      "inputs": []
+    },
+    {
+      "type": "error",
       "name": "NotInvited",
       "inputs": []
     },
@@ -732,17 +870,12 @@
     },
     {
       "type": "error",
+      "name": "PotTooSmall",
+      "inputs": []
+    },
+    {
+      "type": "error",
       "name": "ReentrancyGuardReentrantCall",
-      "inputs": []
-    },
-    {
-      "type": "error",
-      "name": "RoundClosedAlready",
-      "inputs": []
-    },
-    {
-      "type": "error",
-      "name": "RoundStillOpen",
       "inputs": []
     },
     {
@@ -755,6 +888,11 @@
           "internalType": "address"
         }
       ]
+    },
+    {
+      "type": "error",
+      "name": "TooEarlyToSettle",
+      "inputs": []
     }
   ]
 }

@@ -1,58 +1,57 @@
-import { usePublicClient } from 'wagmi';
-import { useEffect, useState } from 'react';
-import { CONTRACT_ADDRESS, CHAIN_ID } from '../appConfig';
-import { SAVINGS_CIRCLES_ABI } from '../abi';
+import { useEffect, useState } from "react";
+import { createPublicClient, http, parseAbiItem } from "viem";
+import { CONTRACT_ADDRESS, CHAIN_ID, RPC_URL } from "@/appConfig";
 
-/**
- * Returns all circle IDs the given address is a member of,
- * derived from Joined events on the contract.
- */
-export function useMyCircles(address: string | undefined): bigint[] {
-  const client = usePublicClient({ chainId: CHAIN_ID });
+const publicClient = createPublicClient({
+  transport: http(RPC_URL),
+  chain: { id: CHAIN_ID, name: "Arc Testnet", nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 }, rpcUrls: { default: { http: [RPC_URL] } } },
+});
+
+const joinedAbi  = parseAbiItem("event Joined(uint256 indexed id, address indexed member, uint256 memberCount)");
+const leftAbi    = parseAbiItem("event Left(uint256 indexed id, address indexed member)");
+const removedAbi = parseAbiItem("event Removed(uint256 indexed id, address indexed member)");
+
+export function useMyCircles(address: `0x${string}` | undefined): {
+  circleIds: bigint[];
+  loading: boolean;
+} {
   const [circleIds, setCircleIds] = useState<bigint[]>([]);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!client || !address || !CONTRACT_ADDRESS) return;
+    if (!address || !CONTRACT_ADDRESS) return;
+
     let cancelled = false;
-
-    async function fetch() {
-      if (!client || !address) return;
+    const run = async () => {
+      setLoading(true);
       try {
-        const blockNumber = await client.getBlockNumber();
-        const from = blockNumber > 50000n ? blockNumber - 50000n : 0n;
+        const latest = await publicClient.getBlockNumber();
+        // Scan from up to 200k blocks ago (roughly a few days on Arc)
+        const fromBlock = latest > 200_000n ? latest - 200_000n : 0n;
 
-        const { decodeEventLog } = await import('viem');
-        const logs = await client.getLogs({
-          address: CONTRACT_ADDRESS as `0x${string}`,
-          fromBlock: from,
-          toBlock: 'latest',
-        });
+        const [joined, left, removed] = await Promise.all([
+          publicClient.getLogs({ address: CONTRACT_ADDRESS, event: joinedAbi,  args: { member: address }, fromBlock }),
+          publicClient.getLogs({ address: CONTRACT_ADDRESS, event: leftAbi,    args: { member: address }, fromBlock }),
+          publicClient.getLogs({ address: CONTRACT_ADDRESS, event: removedAbi, args: { member: address }, fromBlock }),
+        ]);
 
-        if (cancelled) return;
+        const leftIds    = new Set(left.map((l)    => l.args.id as bigint));
+        const removedIds = new Set(removed.map((r) => r.args.id as bigint));
+        const active = [...new Set(joined.map((j) => j.args.id as bigint))]
+          .filter((id) => !leftIds.has(id) && !removedIds.has(id));
 
-        const ids = new Set<string>();
-        for (const log of logs) {
-          try {
-            const result = decodeEventLog({ abi: SAVINGS_CIRCLES_ABI, ...log }) as {
-              eventName: string;
-              args: Record<string, unknown>;
-            };
-            if (result.eventName === 'Joined' && String(result.args.member).toLowerCase() === address.toLowerCase()) {
-              ids.add(String(result.args.id));
-            }
-          } catch {
-            // skip
-          }
-        }
-
-        setCircleIds(Array.from(ids).map(id => BigInt(id)).sort((a, b) => Number(a - b)));
+        if (!cancelled) setCircleIds(active);
       } catch {
-        // ignore
+        // silently ignore — show empty list
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-    }
+    };
 
-    void fetch();
-  }, [client, address]);
+    void run();
+    const timer = setInterval(() => { void run(); }, 30_000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [address]);
 
-  return circleIds;
+  return { circleIds, loading };
 }

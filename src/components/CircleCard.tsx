@@ -1,8 +1,7 @@
 import { useReadContract } from 'wagmi';
 import { SAVINGS_CIRCLES_ABI } from '../abi';
 import { CONTRACT_ADDRESS, CHAIN_ID } from '../appConfig';
-import { formatUsdc } from '../utils/format';
-import { CircleState, stateName } from '../utils/contractHelpers';
+import { formatUsdc, formatPeriodLength } from '../utils/format';
 import { Users, ChevronRight } from 'lucide-react';
 
 interface Props {
@@ -17,19 +16,20 @@ export default function CircleCard({ circleId, onClick }: Props) {
     functionName: 'getCircle',
     args: [circleId],
     chainId: CHAIN_ID,
-    query: { enabled: !!CONTRACT_ADDRESS },
+    query: { enabled: !!CONTRACT_ADDRESS, refetchInterval: 15_000 },
   });
 
   if (!data) return (
     <div className="rounded-2xl bg-[var(--surface)] border border-[var(--border)] p-4 animate-pulse h-20" />
   );
 
-  const [contribution, , size, memberCount, , , state, depositRounds] = data;
-  const stateVal = Number(state);
-  const stateColor =
-    stateVal === (CircleState.Active as number) ? 'text-[var(--success)]' :
-    stateVal === (CircleState.Finished as number) ? 'text-[var(--muted)]' :
-    'text-[var(--accent)]';
+  const { contribution, periodLength, size, memberCount, payout, state, cycle, pot } = data;
+  const isActive = state === 1;
+  const potPct = payout > 0n ? Math.min(100, Number((pot * 100n) / payout)) : 0;
+
+  const stateLabel = isActive
+    ? `Cycle ${cycle} running`
+    : `Forming ${memberCount}/${size}`;
 
   return (
     <button
@@ -38,14 +38,25 @@ export default function CircleCard({ circleId, onClick }: Props) {
     >
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-xs font-semibold uppercase tracking-widest text-[var(--muted)]">Circle #{String(circleId)}</span>
-          <span className={`text-xs font-semibold ${stateColor}`}>{stateName(stateVal)}</span>
+          <span className="text-xs font-semibold px-2 py-0.5 rounded-lg" style={{
+            background: isActive ? 'rgba(26,128,71,0.12)' : 'var(--surface-muted)',
+            color: isActive ? 'var(--success)' : 'var(--muted)',
+          }}>
+            {stateLabel}
+          </span>
         </div>
-        <p className="font-semibold text-[var(--ink)] tabular-nums">{formatUsdc(contribution)}/round</p>
+        <p className="font-semibold tabular-nums text-[var(--ink)]">
+          {formatUsdc(contribution)} USDC / {formatPeriodLength(Number(periodLength))}
+        </p>
         <div className="flex items-center gap-3 mt-1 text-xs text-[var(--muted)]">
-          <span className="flex items-center gap-1"><Users size={11} />{Number(memberCount)}/{Number(size)}</span>
-          <span>Deposit: {Number(depositRounds)} round{depositRounds !== 1 ? 's' : ''}</span>
+          <span className="flex items-center gap-1"><Users size={11} /> {String(memberCount)}/{size}</span>
+          <span>Payout {formatUsdc(payout)} USDC</span>
         </div>
+        {isActive && (
+          <div className="mt-2 h-1 rounded-full overflow-hidden bg-[var(--surface-muted)]">
+            <div className="h-full rounded-full" style={{ width: `${potPct}%`, background: 'var(--success)' }} />
+          </div>
+        )}
       </div>
       <ChevronRight size={18} className="text-[var(--subtle)] group-hover:text-[var(--ink)] transition-colors shrink-0" />
     </button>

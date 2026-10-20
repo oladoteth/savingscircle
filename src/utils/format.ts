@@ -1,76 +1,85 @@
-import { USDC_DECIMALS } from '../appConfig';
+import { USDC_DECIMALS, EXPLORER_BASE } from "@/appConfig";
 
-/** Format raw 6-decimal USDC bigint as a human-readable string, e.g. "12.50 USDC" */
-export function formatUsdc(raw: bigint | undefined, opts?: { symbol?: boolean }): string {
-  if (raw === undefined) return '—';
-  const num = Number(raw) / 10 ** USDC_DECIMALS;
-  const formatted = new Intl.NumberFormat('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(num);
-  return opts?.symbol === false ? formatted : `${formatted} USDC`;
+/** Format a raw bigint USDC amount to a human-readable string, e.g. "12.50" */
+export function formatUsdc(raw: bigint | undefined | null, decimals = 2): string {
+  if (raw === undefined || raw === null) return "—";
+  const n = Number(raw) / 10 ** USDC_DECIMALS;
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
 }
 
-/** Parse a user-typed USDC string (e.g. "5.00") into a raw bigint. Returns undefined on invalid. */
-export function parseUsdc(value: string): bigint | undefined {
-  const num = parseFloat(value);
-  if (isNaN(num) || num <= 0) return undefined;
-  return BigInt(Math.round(num * 10 ** USDC_DECIMALS));
+/** Parse a user-entered USDC string to raw bigint */
+export function parseUsdc(s: string): bigint {
+  const trimmed = s.trim();
+  if (!trimmed || isNaN(Number(trimmed))) return 0n;
+  const [intPart = "0", fracPart = ""] = trimmed.split(".");
+  const frac = fracPart.slice(0, USDC_DECIMALS).padEnd(USDC_DECIMALS, "0");
+  return BigInt(intPart) * BigInt(10 ** USDC_DECIMALS) + BigInt(frac);
 }
 
-/** Shorten an address: 0x1234...abcd */
+/** Shorten an address: 0x1234…5678 */
 export function shortAddr(addr: string): string {
-  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+  if (!addr || addr.length < 10) return addr;
+  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
-/** Format a countdown from now to a unix timestamp (seconds) */
-export function formatCountdown(deadlineSec: number): string {
-  const now = Math.floor(Date.now() / 1000);
-  const diff = deadlineSec - now;
-  if (diff <= 0) return 'Expired';
-  if (diff < 60) return `${diff}s`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ${diff % 60}s`;
-  const h = Math.floor(diff / 3600);
-  const m = Math.floor((diff % 3600) / 60);
-  if (diff < 86400) return `${h}h ${m}m`;
-  const d = Math.floor(diff / 86400);
-  return `${d}d ${h % 24}h`;
+/** Format seconds remaining into human-readable countdown */
+export function formatCountdown(secondsLeft: number): string {
+  if (secondsLeft <= 0) return "now";
+  const d = Math.floor(secondsLeft / 86400);
+  const h = Math.floor((secondsLeft % 86400) / 3600);
+  const m = Math.floor((secondsLeft % 3600) / 60);
+  const s = secondsLeft % 60;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
 }
 
-/** Format a round length in seconds to a readable label */
-export function formatRoundLength(secs: number): string {
-  if (secs < 60) return `${secs}s`;
-  if (secs < 3600) return `${Math.round(secs / 60)}m`;
-  if (secs < 86400) return `${Math.round(secs / 3600)}h`;
-  return `${Math.round(secs / 86400)}d`;
+/** Format a period length in seconds to a readable string */
+export function formatPeriodLength(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
+  return `${Math.round(seconds / 86400)}d`;
 }
 
-/** Parse error to a friendly message */
+/** Map contract custom errors to user-friendly messages */
 export function parseContractError(err: unknown): string {
   const msg = (err as { message?: string })?.message ?? String(err);
   const lower = msg.toLowerCase();
 
-  if (lower.includes('user rejected') || lower.includes('user denied')) return 'Transaction cancelled.';
-  if (lower.includes('alreadypaid') || lower.includes('already paid')) return 'You already paid this round.';
-  if (lower.includes('alreadymember')) return 'You are already a member of this circle.';
-  if (lower.includes('notmember')) return 'You are not a member of this circle.';
-  if (lower.includes('notinvited')) return 'You are not on the invite list for this circle.';
-  if (lower.includes('invalidstate')) return 'This action is not allowed in the current circle state.';
-  if (lower.includes('roundclosedal')) return 'The round deadline has passed — close the round first.';
-  if (lower.includes('roundstillopen')) return 'The round is still open. Wait for the deadline.';
-  if (lower.includes('nothingtowithdraw')) return 'No funds available to withdraw.';
-  if (lower.includes('invitelisttooshort')) return 'Invite list must have at least as many addresses as the circle size.';
-  if (lower.includes('invalidcontribution')) return 'Contribution must be greater than zero.';
-  if (lower.includes('invaliddepositrounds')) return 'Deposit cover must be between 1 and size − 1.';
-  if (lower.includes('invalidsize')) return 'Circle size must be between 2 and 20.';
-  if (lower.includes('circlenotfound')) return 'Circle not found.';
-  if (lower.includes('insufficient')) return 'Insufficient USDC balance.';
-  if (lower.includes('reverted')) {
-    const m = msg.match(/reason="([^"]+)"/);
-    if (m) return `Transaction failed: ${m[1]}`;
-    return 'Transaction failed.';
+  if (lower.includes("user rejected") || lower.includes("user denied")) return "Transaction cancelled.";
+  if (lower.includes("pottoosmall"))    return "Pot doesn't have enough yet. Wait for more contributions.";
+  if (lower.includes("hasarrears"))     return "You have unpaid contributions. Pay your share first.";
+  if (lower.includes("alreadytaken"))   return "You already took the payout this cycle.";
+  if (lower.includes("circlefull"))     return "This circle is already full.";
+  if (lower.includes("notinvited"))     return "You're not on the invite list for this circle.";
+  if (lower.includes("depositnotfull"))  return "Deposit isn't full. Top up before starting.";
+  if (lower.includes("notenoughmembers")) return "Not enough members to start the cycle.";
+  if (lower.includes("tooearlytosettl")) return "The cycle isn't over yet.";
+  if (lower.includes("graceperiodnotelapsed")) return "Grace period hasn't passed yet.";
+  if (lower.includes("nothingtowithdr")) return "Nothing to withdraw right now.";
+  if (lower.includes("invalidstate"))   return "This action isn't available in the current state.";
+  if (lower.includes("alreadymember"))  return "You're already in this circle.";
+  if (lower.includes("notmember"))      return "You're not a member of this circle.";
+  if (lower.includes("depositalreadyfull")) return "Your deposit is already at the full amount.";
+  if (lower.includes("insufficient funds") || lower.includes("exceeds balance")) return "Not enough USDC in your wallet.";
+  if (lower.includes("network") || lower.includes("timeout")) return "Network error. Please try again.";
+  if (lower.includes("reverted")) {
+    const match = msg.match(/reason="([^"]+)"/);
+    if (match) return `Transaction failed: ${match[1]}`;
+    return "Transaction failed. Please try again.";
   }
-  return 'Something went wrong. Please try again.';
+  return "Something went wrong. Please try again.";
 }
 
-export { buildExplorerTxUrl, buildExplorerAddrUrl } from './contractHelpers';
+export function buildExplorerTxUrl(hash: string): string {
+  return `${EXPLORER_BASE}/tx/${hash}`;
+}
+
+export function buildExplorerAddrUrl(addr: string): string {
+  return `${EXPLORER_BASE}/address/${addr}`;
+}

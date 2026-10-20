@@ -1,111 +1,111 @@
-import { usePublicClient } from 'wagmi';
-import { useEffect, useState } from 'react';
-import { parseAbiItem, type Log } from 'viem';
-import { CONTRACT_ADDRESS, CHAIN_ID } from '../appConfig';
-import { SAVINGS_CIRCLES_ABI } from '../abi';
-import { buildExplorerTxUrl } from '../utils/contractHelpers';
-import { formatUsdc, shortAddr } from '../utils/format';
+import { useEffect, useState } from "react";
+import { createPublicClient, http, parseAbiItem } from "viem";
+import { CONTRACT_ADDRESS, CHAIN_ID, RPC_URL } from "@/appConfig";
 
-export interface ActivityEvent {
-  id: string;
-  text: string;
-  txUrl: string;
+const publicClient = createPublicClient({
+  transport: http(RPC_URL),
+  chain: { id: CHAIN_ID, name: "Arc Testnet", nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 }, rpcUrls: { default: { http: [RPC_URL] } } },
+});
+
+export interface ActivityItem {
   blockNumber: bigint;
+  logIndex: number;
+  txHash: string;
+  kind:
+    | "joined" | "left" | "removed" | "toppedUp"
+    | "cycleStarted" | "collected" | "missed"
+    | "payoutTaken" | "defaulted" | "cycleSettled" | "withdrawn";
+  member?: string;
+  amount?: bigint;
+  lateCount?: bigint;
+  cycle?: number;
+  owedRemaining?: bigint;
+  cycleStart?: bigint;
+  memberCount?: bigint;
 }
 
 const EVENTS = [
-  'Joined(uint256 indexed id, address indexed member, uint256 memberCount)',
-  'Left(uint256 indexed id, address indexed member)',
-  'CircleStarted(uint256 indexed id, uint64 deadline)',
-  'Contributed(uint256 indexed id, address indexed member, uint8 round)',
-  'Missed(uint256 indexed id, address indexed member, uint8 round)',
-  'Defaulted(uint256 indexed id, address indexed member, uint8 round)',
-  'RoundClosed(uint256 indexed id, uint8 round, address indexed recipient, uint256 amount)',
-  'CircleFinished(uint256 indexed id)',
-  'Repaid(uint256 indexed id, address indexed debtor, address indexed creditor, uint256 amount)',
-  'Withdrawn(address indexed member, uint256 amount)',
-] as const;
+  { kind: "joined"       as const, abi: parseAbiItem("event Joined(uint256 indexed id, address indexed member, uint256 memberCount)") },
+  { kind: "left"         as const, abi: parseAbiItem("event Left(uint256 indexed id, address indexed member)") },
+  { kind: "removed"      as const, abi: parseAbiItem("event Removed(uint256 indexed id, address indexed member)") },
+  { kind: "toppedUp"     as const, abi: parseAbiItem("event ToppedUp(uint256 indexed id, address indexed member, uint256 amount)") },
+  { kind: "cycleStarted" as const, abi: parseAbiItem("event CycleStarted(uint256 indexed id, uint32 cycle, uint64 cycleStart)") },
+  { kind: "collected"    as const, abi: parseAbiItem("event Collected(uint256 indexed id, address indexed member, uint256 amount, uint256 lateCount)") },
+  { kind: "missed"       as const, abi: parseAbiItem("event Missed(uint256 indexed id, address indexed member, uint256 owedRemaining)") },
+  { kind: "payoutTaken"  as const, abi: parseAbiItem("event PayoutTaken(uint256 indexed id, uint32 cycle, address indexed member, uint256 payout)") },
+  { kind: "defaulted"    as const, abi: parseAbiItem("event Defaulted(uint256 indexed id, address indexed member)") },
+  { kind: "cycleSettled" as const, abi: parseAbiItem("event CycleSettled(uint256 indexed id, uint32 cycle)") },
+  { kind: "withdrawn"    as const, abi: parseAbiItem("event Withdrawn(address indexed member, uint256 amount)") },
+];
 
-function describeLog(log: Log & { eventName?: string; args?: Record<string, unknown> }): string | null {
-  const { eventName, args } = log;
-  if (!eventName || !args) return null;
-  switch (eventName) {
-    case 'Joined': return `${shortAddr(String(args.member))} joined (${String(args.memberCount)} members)`;
-    case 'Left': return `${shortAddr(String(args.member))} left the circle`;
-    case 'CircleStarted': return `Circle started`;
-    case 'Contributed': return `${shortAddr(String(args.member))} paid round ${String(args.round)}`;
-    case 'Missed': return `${shortAddr(String(args.member))} missed round ${String(args.round)}`;
-    case 'Defaulted': return `${shortAddr(String(args.member))} defaulted round ${String(args.round)}`;
-    case 'RoundClosed': return `Round ${String(args.round)} closed — ${shortAddr(String(args.recipient))} received ${formatUsdc(args.amount as bigint)}`;
-    case 'CircleFinished': return `Circle finished`;
-    case 'Repaid': return `${shortAddr(String(args.creditor))} repaid ${formatUsdc(args.amount as bigint)} from ${shortAddr(String(args.debtor))}'s pot`;
-    case 'Withdrawn': return `${shortAddr(String(args.member))} withdrew ${formatUsdc(args.amount as bigint)}`;
-    default: return null;
-  }
-}
-
-export function useCircleEvents(circleId: bigint | undefined): ActivityEvent[] {
-  const client = usePublicClient({ chainId: CHAIN_ID });
-  const [events, setEvents] = useState<ActivityEvent[]>([]);
+export function useCircleEvents(id: bigint | undefined): {
+  events: ActivityItem[];
+  loading: boolean;
+} {
+  const [events, setEvents] = useState<ActivityItem[]>([]);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!client || !circleId === undefined || !CONTRACT_ADDRESS) return;
+    if (id === undefined || !CONTRACT_ADDRESS) return;
+
     let cancelled = false;
-
-    async function fetchEvents() {
-      if (!client || circleId === undefined) return;
+    const run = async () => {
+      setLoading(true);
       try {
-        const blockNumber = await client.getBlockNumber();
-        const from = blockNumber > 10000n ? blockNumber - 10000n : 0n;
+        const latest = await publicClient.getBlockNumber();
+        const fromBlock = latest > 200_000n ? latest - 200_000n : 0n;
 
-        const logs = await client.getLogs({
-          address: CONTRACT_ADDRESS as `0x${string}`,
-          fromBlock: from,
-          toBlock: 'latest',
+        const results = await Promise.all(
+          EVENTS.map(({ abi }) =>
+            publicClient.getLogs({
+              address: CONTRACT_ADDRESS,
+              event: abi,
+              fromBlock,
+            }).catch(() => [])
+          )
+        );
+
+        const items: ActivityItem[] = [];
+        results.forEach((logs, i) => {
+          const kind = EVENTS[i].kind;
+          for (const log of logs) {
+            const a = log.args as Record<string, unknown>;
+            // Only include events for this circle id
+            if (a.id !== undefined && (a.id as bigint) !== id) continue;
+            // withdrawn events don't have id — include all for address-level display
+            items.push({
+              blockNumber: log.blockNumber ?? 0n,
+              logIndex:    log.logIndex ?? 0,
+              txHash:      log.transactionHash ?? "",
+              kind,
+              member:       typeof a.member === "string" ? a.member : undefined,
+              amount:       typeof a.amount === "bigint" ? a.amount : (typeof a.payout === "bigint" ? a.payout : undefined),
+              lateCount:    typeof a.lateCount === "bigint" ? a.lateCount : undefined,
+              cycle:        typeof a.cycle === "number" ? a.cycle : undefined,
+              owedRemaining:typeof a.owedRemaining === "bigint" ? a.owedRemaining : undefined,
+              cycleStart:   typeof a.cycleStart === "bigint" ? a.cycleStart : undefined,
+              memberCount:  typeof a.memberCount === "bigint" ? a.memberCount : undefined,
+            });
+          }
         });
 
-        if (cancelled) return;
+        items.sort((a, b) => {
+          if (a.blockNumber !== b.blockNumber) return Number(b.blockNumber - a.blockNumber);
+          return b.logIndex - a.logIndex;
+        });
 
-        // decode logs manually using the ABI
-        const { decodeEventLog } = await import('viem');
-        const decoded: ActivityEvent[] = [];
-        for (const log of logs) {
-          try {
-            const result = decodeEventLog({ abi: SAVINGS_CIRCLES_ABI, ...log }) as {
-              eventName: string;
-              args: Record<string, unknown>;
-            };
-            // filter to the requested circle where possible
-            const logId = result.args?.id as bigint | undefined;
-            if (logId !== undefined && logId !== circleId) continue;
-
-            const text = describeLog({ ...log, eventName: result.eventName, args: result.args });
-            if (!text) continue;
-            decoded.push({
-              id: `${log.blockNumber}-${log.logIndex}`,
-              text,
-              txUrl: buildExplorerTxUrl(log.transactionHash ?? ''),
-              blockNumber: log.blockNumber ?? 0n,
-            });
-          } catch {
-            // skip undecodable logs
-          }
-        }
-        decoded.sort((a, b) => Number(b.blockNumber - a.blockNumber));
-        setEvents(decoded);
+        if (!cancelled) setEvents(items);
       } catch {
-        // ignore fetch errors silently
+        // silently ignore
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-    }
+    };
 
-    void fetchEvents();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, circleId]);
+    void run();
+    const timer = setInterval(() => { void run(); }, 15_000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [id]);
 
-  return events;
+  return { events, loading };
 }
-
-// Parse event names for use with parseAbiItem (for type-safety)
-void EVENTS;
-void parseAbiItem; // keep import

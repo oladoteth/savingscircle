@@ -1,139 +1,136 @@
-import { useReadContract } from 'wagmi';
-import { ArrowLeft, ExternalLink, CheckCircle, Clock, AlertTriangle, ShieldOff } from 'lucide-react';
-import { SAVINGS_CIRCLES_ABI } from '../abi';
-import { CONTRACT_ADDRESS, CHAIN_ID } from '../appConfig';
-import { shortAddr } from '../utils/format';
-import { buildExplorerAddrUrl } from '../utils/contractHelpers';
+import { ArrowLeft, ExternalLink, CheckCircle, Clock, AlertTriangle, XCircle } from 'lucide-react';
+import { useReputation } from '@/hooks/useCircle';
+import { shortAddr, buildExplorerAddrUrl } from '@/utils/format';
 
 interface Props {
   address: string;
   onNavigate: (path: string | number) => void;
 }
 
-export default function MemberProfile({ address, onNavigate }: Props) {
-  const { data: rep } = useReadContract({
-    address: CONTRACT_ADDRESS,
-    abi: SAVINGS_CIRCLES_ABI,
-    functionName: 'reputation',
-    args: [address as `0x${string}`],
-    chainId: CHAIN_ID,
-    query: { enabled: !!CONTRACT_ADDRESS },
-  });
+const glass = {
+  card: {
+    background: 'var(--surface-strong)',
+    backdropFilter: 'blur(24px) saturate(180%)',
+    WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+    border: '1px solid var(--border)',
+    borderRadius: '1.5rem',
+  } as React.CSSProperties,
+};
 
-  const repTuple = rep;
-  const [completedCircles, onTimePayments, missedPayments, defaults] = repTuple ?? [0n, 0n, 0n, 0n];
-
-  const total = (onTimePayments) + (missedPayments);
-  const onTimeRate = total > 0n ? Math.round(Number((onTimePayments) * 100n / (total))) : null;
-
-  const scoreColor =
-    onTimeRate === null ? 'text-[var(--muted)]' :
-    onTimeRate >= 90 ? 'text-[var(--success)]' :
-    onTimeRate >= 70 ? 'text-yellow-600' :
-    'text-[var(--danger)]';
-
+interface StatProps { icon: React.ReactNode; label: string; value: string; accent?: string }
+function StatCard({ icon, label, value, accent }: StatProps) {
   return (
-    <div className="min-h-dvh flex flex-col" style={{ background: 'var(--bg-gradient)' }}>
-      {/* Header */}
-      <header className="border-b border-[var(--border)] bg-[var(--surface-strong)] backdrop-blur-md sticky top-0 z-20">
-        <div className="max-w-md mx-auto px-4 py-3 flex items-center gap-3">
-          <button onClick={() => onNavigate(-1)} className="p-1.5 rounded-lg hover:bg-[var(--surface-muted)] transition">
-            <ArrowLeft size={18} className="text-[var(--ink)]" />
-          </button>
-          <h1 className="display text-base font-bold text-[var(--ink)]">Savings Record</h1>
-        </div>
-      </header>
-
-      <main className="flex-1 max-w-md mx-auto w-full px-4 py-6 flex flex-col gap-5">
-        {/* Identity card */}
-        <div className="rounded-3xl bg-[var(--surface-strong)] border border-[var(--border)] p-6 flex flex-col items-center gap-4">
-          {/* Avatar */}
-          <div className="w-16 h-16 rounded-full bg-[var(--accent)] flex items-center justify-center">
-            <span className="display text-2xl font-bold text-white">
-              {address.slice(2, 4).toUpperCase()}
-            </span>
-          </div>
-
-          <div className="text-center">
-            <p className="font-mono text-sm text-[var(--ink-2)] mb-1">{shortAddr(address)}</p>
-            <a
-              href={buildExplorerAddrUrl(address)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-[var(--muted)] flex items-center justify-center gap-1 hover:underline"
-            >
-              View on explorer <ExternalLink size={11} />
-            </a>
-          </div>
-
-          {/* Score */}
-          {onTimeRate !== null && (
-            <div className={`text-center ${scoreColor}`}>
-              <p className={`display text-4xl font-bold tabular-nums`} style={{ letterSpacing: '-0.03em' }}>
-                {onTimeRate}%
-              </p>
-              <p className="text-xs text-[var(--muted)] mt-0.5">on-time payment rate</p>
-            </div>
-          )}
-        </div>
-
-        {/* Stats grid */}
-        <div className="grid grid-cols-2 gap-3">
-          <StatCard
-            icon={<CheckCircle size={18} className="text-[var(--success)]" />}
-            label="Circles completed"
-            value={String(completedCircles)}
-          />
-          <StatCard
-            icon={<Clock size={18} className="text-[var(--accent)]" />}
-            label="On-time payments"
-            value={String(onTimePayments)}
-          />
-          <StatCard
-            icon={<AlertTriangle size={18} className="text-yellow-500" />}
-            label="Missed payments"
-            value={String(missedPayments)}
-          />
-          <StatCard
-            icon={<ShieldOff size={18} className="text-[var(--danger)]" />}
-            label="Defaults"
-            value={String(defaults)}
-          />
-        </div>
-
-        {/* What this means */}
-        <div className="rounded-2xl bg-[var(--surface)] border border-[var(--border)] p-5">
-          <h3 className="text-xs font-semibold text-[var(--muted)] uppercase tracking-widest mb-2">What is this?</h3>
-          <p className="text-sm text-[var(--ink-2)] text-pretty leading-relaxed">
-            This record is stored publicly on-chain and cannot be altered. It shows how reliably this address has participated in savings circles — useful for deciding who to invite to your next circle.
-          </p>
-          <p className="text-xs text-[var(--muted)] mt-3 text-pretty">
-            Note: on-chain reputation is not Sybil-resistant. A person controlling many wallets can build a record at low cost. Use it as one signal alongside personal trust.
-          </p>
-        </div>
-
-        {/* Full address */}
-        <div>
-          <p className="text-xs font-semibold text-[var(--muted)] uppercase tracking-widest mb-1.5">Full address</p>
-          <div
-            className="rounded-xl bg-[var(--surface-muted)] border border-[var(--border)] px-4 py-3 font-mono text-xs text-[var(--ink-2)] break-all select-all cursor-pointer"
-            onClick={() => { void navigator.clipboard.writeText(address); }}
-            title="Click to copy"
-          >
-            {address}
-          </div>
-        </div>
-      </main>
+    <div className="rounded-2xl p-4 flex flex-col gap-1" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+      <div className="flex items-center gap-1.5 mb-1">
+        {icon}
+        <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--muted)' }}>{label}</span>
+      </div>
+      <span className="display text-3xl font-bold tabular-nums" style={{ color: accent ?? 'var(--ink)' }}>{value}</span>
     </div>
   );
 }
 
-function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+export default function MemberProfile({ address: addr, onNavigate }: Props) {
+  const { data: rep } = useReputation(addr as `0x${string}`);
+
+  const [cyclesCompleted, onTimePayments, latePayments, missedPayments, defaults] = rep
+    ? [Number(rep[0]), Number(rep[1]), Number(rep[2]), Number(rep[3]), Number(rep[4])]
+    : [0, 0, 0, 0, 0];
+
+  const totalPayments = onTimePayments + latePayments + missedPayments;
+  const onTimePct = totalPayments > 0 ? Math.round((onTimePayments / totalPayments) * 100) : null;
+
   return (
-    <div className="rounded-2xl bg-[var(--surface)] border border-[var(--border)] p-4">
-      <div className="flex items-center gap-2 mb-2">{icon}</div>
-      <p className="text-2xl font-bold tabular-nums text-[var(--ink)] display" style={{ letterSpacing: '-0.02em' }}>{value}</p>
-      <p className="text-xs text-[var(--muted)] mt-0.5">{label}</p>
+    <div className="min-h-dvh" style={{ background: 'var(--bg-gradient)' }}>
+      <div className="mx-auto max-w-md px-4 pt-6 pb-20">
+        <button onClick={() => onNavigate(-1)} className="flex items-center gap-1.5 text-sm mb-5" style={{ color: 'var(--muted)' }}>
+          <ArrowLeft className="size-4" /> Back
+        </button>
+
+        {/* Identity */}
+        <section className="rounded-3xl p-5 mb-5" style={glass.card}>
+          <div className="flex items-center gap-3 mb-3">
+            <div className="size-12 rounded-2xl flex items-center justify-center text-base font-bold" style={{ background: 'var(--surface-muted)', color: 'var(--ink-2)' }}>
+              {addr.slice(2, 4).toUpperCase()}
+            </div>
+            <div>
+              <p className="mono text-sm font-semibold" style={{ color: 'var(--ink)' }}>{shortAddr(addr)}</p>
+              <a
+                href={buildExplorerAddrUrl(addr)}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-xs mt-0.5"
+                style={{ color: 'var(--accent-hover)' }}
+              >
+                View on explorer <ExternalLink className="size-3" />
+              </a>
+            </div>
+          </div>
+          <p className="text-xs text-pretty leading-relaxed" style={{ color: 'var(--muted)' }}>
+            This savings record is public and portable. It belongs to the wallet, not to any app — a history a lender could accept.
+          </p>
+        </section>
+
+        {/* Stats grid */}
+        <div className="grid grid-cols-2 gap-3 mb-5">
+          <StatCard
+            icon={<CheckCircle className="size-4" style={{ color: 'var(--success)' }} />}
+            label="Cycles done"
+            value={cyclesCompleted.toString()}
+            accent="var(--success)"
+          />
+          <StatCard
+            icon={<CheckCircle className="size-4" style={{ color: 'var(--success)' }} />}
+            label="On time"
+            value={onTimePct !== null ? `${onTimePct}%` : '—'}
+            accent={onTimePct !== null && onTimePct >= 90 ? 'var(--success)' : 'var(--ink)'}
+          />
+          <StatCard
+            icon={<Clock className="size-4" style={{ color: 'var(--accent)' }} />}
+            label="Late payments"
+            value={latePayments.toString()}
+          />
+          <StatCard
+            icon={<AlertTriangle className="size-4" style={{ color: 'var(--danger)' }} />}
+            label="Missed"
+            value={missedPayments.toString()}
+            accent={missedPayments > 0 ? 'var(--danger)' : 'var(--ink)'}
+          />
+        </div>
+
+        {defaults > 0 && (
+          <div className="rounded-2xl p-4 flex items-center gap-3 mb-4" style={{ background: 'rgba(186,43,76,0.08)', border: '1px solid rgba(186,43,76,0.2)' }}>
+            <XCircle className="size-5 shrink-0" style={{ color: 'var(--danger)' }} />
+            <div>
+              <p className="text-xs font-semibold" style={{ color: 'var(--danger)' }}>Defaults: {defaults}</p>
+              <p className="text-xs mt-0.5 text-pretty" style={{ color: 'var(--muted)' }}>
+                This wallet was removed from a circle for missing payments without sufficient deposit cover.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Full record */}
+        <div className="rounded-2xl p-4 space-y-2" style={{ background: 'var(--surface-muted)' }}>
+          <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: 'var(--muted)' }}>Full record</p>
+          {[
+            ['Cycles completed', cyclesCompleted],
+            ['On-time payments', onTimePayments],
+            ['Late payments', latePayments],
+            ['Missed payments', missedPayments],
+            ['Defaults', defaults],
+          ].map(([label, val]) => (
+            <div key={String(label)} className="flex justify-between text-xs">
+              <span style={{ color: 'var(--muted)' }}>{label}</span>
+              <span className="font-semibold tabular-nums" style={{ color: 'var(--ink)' }}>{val}</span>
+            </div>
+          ))}
+        </div>
+
+        <p className="text-xs mt-4 text-center text-pretty" style={{ color: 'var(--subtle)' }}>
+          Reputation note: these numbers reflect on-chain activity and do not account for Sybil wallets. A high completion rate on a single wallet carries more weight when paired with a long on-chain history.
+        </p>
+      </div>
     </div>
   );
 }

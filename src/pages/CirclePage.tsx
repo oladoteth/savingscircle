@@ -202,6 +202,12 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
 
   const graceElapsed = Number(c.settledAt) > 0 && BigInt(now) >= c.settledAt + c.periodLength;
 
+  // Between-cycles cooldown: after cycle 1+, startCycle is gated by settledAt + periodLength.
+  const hasPrevCycle      = Number(c.settledAt) > 0;
+  const startWindowOpens  = hasPrevCycle ? Number(c.settledAt) + Number(c.periodLength) : 0;
+  const inCooldown        = isPending && hasPrevCycle && now < startWindowOpens;
+  const cooldownSecsLeft  = inCooldown ? startWindowOpens - now : 0;
+
   const stateStr = isPending
     ? `Forming ${c.memberCount}/${c.size}`
     : `Cycle ${c.cycle} running — period ${Number(c.currentPeriod) + 1}/${c.size}`;
@@ -270,6 +276,16 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
                 {formatCountdown(countdownSecs)}
               </span>
             </p>
+          )}
+
+          {inCooldown && (
+            <div className="mt-3 rounded-xl px-3 py-2.5" style={{ background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.3)' }}>
+              <p className="text-xs font-semibold" style={{ color: '#d97706' }}>
+                Next cycle can start in{' '}
+                <span className="tabular-nums">{formatCountdown(cooldownSecsLeft)}</span>.{' '}
+                Leave now if you want out.
+              </p>
+            </div>
           )}
         </section>
 
@@ -389,6 +405,8 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
               <TxButton
                 label="Start cycle"
                 onClick={() => doSingle('startCycle')}
+                disabled={inCooldown}
+                disabledReason={inCooldown ? `Cooldown: starts in ${formatCountdown(cooldownSecsLeft)}` : undefined}
                 isPending={singlePending}
                 isConfirming={singleConfirming}
                 variant="secondary"

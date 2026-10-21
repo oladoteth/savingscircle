@@ -523,7 +523,9 @@ contract SavingsCirclesTest is Test {
         assertEq(sc.claimable(bob),   300e6, "bob full payout");
         assertEq(sc.claimable(carol), 300e6, "carol full payout");
 
-        // Alice must topUp before next cycle
+        // Alice must topUp before next cycle.
+        // Warp past the one-period cooldown first so we can isolate DepositNotFull.
+        vm.warp(uint256(sc.getCircle(id).settledAt) + PERIOD_LENGTH + 1);
         vm.prank(alice);
         vm.expectRevert(SavingsCircles.DepositNotFull.selector);
         sc.startCycle(id);
@@ -707,7 +709,10 @@ contract SavingsCirclesTest is Test {
         assertEq(sc.memberInfo(id, carol).deposit, 100e6, "carol deposit full");
         assertEq(sc.memberInfo(id, dave).deposit,  100e6, "dave deposit full");
 
-        // startCycle should work (all full)
+        // Warp past the one-period cooldown before starting cycle 2.
+        vm.warp(uint256(sc.getCircle(id).settledAt) + PERIOD_LENGTH + 1);
+
+        // startCycle should work (all full, cooldown elapsed)
         sc.startCycle(id);
         SavingsCircles.CircleView memory v = sc.getCircle(id);
         assertEq(uint8(v.state), uint8(SavingsCircles.CircleState.Active));
@@ -819,16 +824,17 @@ contract SavingsCirclesTest is Test {
         assertTrue(sc.memberInfo(id, fa).isMember, "fa still member");
         assertEq(sc.memberInfo(id, fa).deposit, 0, "fa deposit = 0");
 
-        // startCycle → DepositNotFull
+        // Warp past the cooldown, then confirm DepositNotFull fires.
+        vm.warp(uint256(sc.getCircle(id).settledAt) + PERIOD_LENGTH + 1);
         vm.expectRevert(SavingsCircles.DepositNotFull.selector);
         sc.startCycle(id);
 
-        // topUp restores fa's deposit → startCycle succeeds
+        // topUp restores fa's deposit → startCycle succeeds (cooldown already elapsed)
         usdc.mint(fa, 200e6);
         vm.prank(fa); sc.topUp(id);
         assertEq(sc.memberInfo(id, fa).deposit, 200e6, "fa deposit restored");
 
-        sc.startCycle(id); // no revert — all deposits full
+        sc.startCycle(id); // no revert — all deposits full and cooldown elapsed
         assertEq(uint8(sc.getCircle(id).state), uint8(SavingsCircles.CircleState.Active));
     }
 
@@ -1154,5 +1160,111 @@ contract SavingsCirclesTest is Test {
         uint256[] memory ids2 = new uint256[](1); ids2[0] = id;
         address[] memory accs2 = new address[](4); accs2[0] = fa; accs2[1] = fb; accs2[2] = fc; accs2[3] = newcomer;
         _assertBalanceInvariant(ids2, accs2);
+    }
+
+    // =======================================================================
+    // Test 16 — startCycle cooldown:
+    //   (a) startCycle right after settle reverts TooEarlyToStart.
+    //   (b) Works exactly at settledAt + periodLength.
+    //   (c) A member can leave during the cooldown window.
+    // =======================================================================
+    function test_startCycleCooldown() public {
+        _fund(alice, 700e6);
+        _fund(bob,   700e6);
+        _fund(carol, 700e6);
+
+        uint256 id = _createCircle(3, 1);
+        vm.prank(alice); sc.join(id);
+        vm.prank(bob);   sc.join(id);
+        vm.prank(carol); sc.join(id);
+
+        // First cycle: no cooldown needed (settledAt == 0).
+        sc.startCycle(id);
+        uint64 cs1 = sc.getCircle(id).cycleStart;
+
+        // Run cycle 1 fully: all pay, all request, settle.
+        sc.collect(id);
+        vm.prank(alice); sc.request(id);
+        vm.warp(uint256(cs1) + PERIOD_LENGTH);
+        sc.collect(id);
+        vm.prank(bob); sc.request(id);
+        vm.warp(uint256(cs1) + 2 * PERIOD_LENGTH);
+        sc.collect(id);
+        vm.prank(carol); sc.request(id);
+        vm.warp(uint256(cs1) + 3 * PERIOD_LENGTH + 1);
+        sc.settleCycle(id);
+
+        uint64 settled = sc.getCircle(id).settledAt;
+        assertEq(uint8(sc.getCircle(id).state), uint8(SavingsCircles.CircleState.Pending));
+
+        // (a) Right after settle: TooEarlyToStart.
+        vm.expectRevert(SavingsCircles.TooEarlyToStart.selector);
+        sc.startCycle(id);
+
+        // One second before the window opens: still reverts.
+        vm.warp(uint256(settled) + PERIOD_LENGTH - 1);
+        vm.expectRevert(SavingsCircles.TooEarlyToStart.selector);
+        sc.startCycle(id);
+
+        // (b) Exactly at settledAt + periodLength: succeeds.
+        vm.warp(uint256(settled) + PERIOD_LENGTH);
+        sc.startCycle(id);
+        assertEq(uint8(sc.getCircle(id).state), uint8(SavingsCircles.CircleState.Active));
+        assertEq(sc.getCircle(id).cycle, 2, "cycle 2 started");
+    }
+
+    function test_startCycleCooldown_memberCanLeave() public {
+        _fund(alice, 700e6);
+        _fund(bob,   700e6);
+        _fund(carol, 700e6);
+
+        uint256 id = _createCircle(3, 1);
+        vm.prank(alice); sc.join(id);
+        vm.prank(bob);   sc.join(id);
+        vm.prank(carol); sc.join(id);
+
+        // Run cycle 1.
+        sc.startCycle(id);
+        uint64 cs1 = sc.getCircle(id).cycleStart;
+        sc.collect(id);
+        vm.prank(alice); sc.request(id);
+        vm.warp(uint256(cs1) + PERIOD_LENGTH);
+        sc.collect(id);
+        vm.prank(bob); sc.request(id);
+        vm.warp(uint256(cs1) + 2 * PERIOD_LENGTH);
+        sc.collect(id);
+        vm.prank(carol); sc.request(id);
+        vm.warp(uint256(cs1) + 3 * PERIOD_LENGTH + 1);
+        sc.settleCycle(id);
+
+        uint64 settled = sc.getCircle(id).settledAt;
+
+        // (c) During the cooldown window, alice leaves.
+        // Warp to half-way through the window.
+        vm.warp(uint256(settled) + PERIOD_LENGTH / 2);
+
+        // startCycle still blocked.
+        vm.expectRevert(SavingsCircles.TooEarlyToStart.selector);
+        sc.startCycle(id);
+
+        // Alice leaves — she is in Pending state and the leave-window is exactly for this.
+        vm.prank(alice); sc.leave(id);
+        assertEq(sc.getCircle(id).memberCount, 2, "alice left");
+        // Alice's deposit is credited to claimable.
+        assertEq(sc.claimable(alice), 300e6 + 100e6, "alice claimable = payout + deposit returned");
+
+        // Circle now has 2 of 3 members — startCycle would revert NotEnoughMembers even after cooldown.
+        vm.warp(uint256(settled) + PERIOD_LENGTH);
+        vm.expectRevert(SavingsCircles.NotEnoughMembers.selector);
+        sc.startCycle(id);
+
+        // Dave joins to fill the slot.
+        _fund(dave, 400e6);
+        vm.prank(dave); sc.join(id);
+        assertEq(sc.getCircle(id).memberCount, 3, "dave joined");
+
+        // Now startCycle succeeds (cooldown already elapsed).
+        sc.startCycle(id);
+        assertEq(uint8(sc.getCircle(id).state), uint8(SavingsCircles.CircleState.Active));
     }
 }

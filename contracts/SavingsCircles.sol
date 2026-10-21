@@ -120,6 +120,7 @@ contract SavingsCircles is ReentrancyGuard {
     error HasArrears();
     error PotTooSmall();
     error TooEarlyToSettle();
+    error TooEarlyToStart();
     error GracePeriodNotElapsed();
     error NothingToWithdraw();
 
@@ -264,10 +265,19 @@ contract SavingsCircles is ReentrancyGuard {
 
     /// @notice Start a new cycle. Callable by anyone when the circle is full
     ///         and every member's deposit is full.
+    ///         After the first cycle, startCycle is gated by a one-period cooldown
+    ///         (block.timestamp >= settledAt + periodLength) so members have time
+    ///         to leave between cycles. The first cycle (settledAt == 0) starts
+    ///         immediately once the circle is full.
     function startCycle(uint256 id) external nonReentrant {
         Circle storage c = _requireExists(id);
         if (c.state != CircleState.Pending) revert InvalidState();
         if (c.members.length != c.size) revert NotEnoughMembers();
+
+        // After the first cycle, enforce a one-period leave window.
+        if (c.settledAt != 0 && block.timestamp < uint256(c.settledAt) + uint256(c.periodLength)) {
+            revert TooEarlyToStart();
+        }
 
         uint256 full = c.contribution * c.depositPeriods;
         uint256 len  = c.members.length;

@@ -60,6 +60,7 @@ export function parseContractError(err: unknown): string {
   if (lower.includes("depositnotfull"))  return "Deposit isn't full. Top up before starting.";
   if (lower.includes("notenoughmembers")) return "Not enough members to start the cycle.";
   if (lower.includes("tooearlytosettl")) return "The cycle isn't over yet.";
+  if (lower.includes("tooearlytostart")) return "The cooldown window hasn't passed yet. Members need time to leave.";
   if (lower.includes("graceperiodnotelapsed")) return "Grace period hasn't passed yet.";
   if (lower.includes("nothingtowithdr")) return "Nothing to withdraw right now.";
   if (lower.includes("invalidstate"))   return "This action isn't available in the current state.";

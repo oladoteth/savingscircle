@@ -5,7 +5,7 @@ import { decodeEventLog } from 'viem';
 import { ArrowLeft, Link as LinkIcon } from 'lucide-react';
 import { SAVINGS_CIRCLES_ABI } from '@/abi';
 import { CONTRACT_ADDRESS, CHAIN_ID } from '@/appConfig';
-import { persistCreatedCircle } from '@/hooks/useMyCircles';
+
 import { parseUsdc, formatUsdc } from '@/utils/format';
 import { TxButton } from '@/components/shared/TxButton';
 import { ErrorMsg } from '@/components/shared/ErrorMsg';
@@ -51,21 +51,19 @@ export default function CreateCircle({ onNavigate }: Props) {
   const { isLoading: isConfirming, isSuccess, data: receipt } = useWaitForTransactionReceipt({ hash });
 
   // Derive circle ID from receipt during render — avoids setState-in-effect pattern.
-  // Also persist to localStorage so Home can show it under "Created by you".
   const derivedId = useMemo(() => {
-    if (!isSuccess || !receipt || !address) return null;
+    if (!isSuccess || !receipt) return null;
     for (const log of receipt.logs) {
       try {
         const decoded = decodeEventLog({ abi: SAVINGS_CIRCLES_ABI, data: log.data, topics: log.topics });
         if (decoded.eventName === 'CircleCreated') {
           const id = (decoded.args as { id: bigint }).id;
-          persistCreatedCircle(address, id);
           return String(id);
         }
       } catch { /* skip */ }
     }
     return null;
-  }, [isSuccess, receipt, address]);
+  }, [isSuccess, receipt]);
 
   const effectiveCreatedId = derivedId;
 

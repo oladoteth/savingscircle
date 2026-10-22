@@ -16,7 +16,8 @@ An on-demand ROSCA (ajo, tanda, susu) on Arc. Members save together with autopay
 |---|---|---|---|
 | SavingsCircles v1 | Arc Testnet | [0xe4a39b29fee8942eafed5798105ae8982b0662f5](https://explorer.testnet.arc.io/address/0xe4a39b29fee8942eafed5798105ae8982b0662f5) | Old join-order model; superseded |
 | SavingsCircles v2 | Arc Testnet | [0x74d6003369836212d5d8685082ab3e89b9809c2f](https://explorer.testnet.arc.io/address/0x74d6003369836212d5d8685082ab3e89b9809c2f) | Superseded by v2.1 |
-| SavingsCircles v2.1 | Arc Testnet | [0xc7bb731ac10a15955017d6a5fe63d62ec526f661](https://explorer.testnet.arc.io/address/0xc7bb731ac10a15955017d6a5fe63d62ec526f661) | + TooEarlyToStart cooldown; live — tx 0x9809378f493c0ebd5ab6b5361e2ce06e3543bfe3b39829bcbd1e94ba72fb5cac |
+| SavingsCircles v2.1 | Arc Testnet | [0xc7bb731ac10a15955017d6a5fe63d62ec526f661](https://explorer.testnet.arc.io/address/0xc7bb731ac10a15955017d6a5fe63d62ec526f661) | + TooEarlyToStart cooldown; superseded |
+| SavingsCircles v2.2 | Arc Testnet | [0xaa433394d212a4d2257b634a6da214037db66b62](https://explorer.testnet.arc.io/address/0xaa433394d212a4d2257b634a6da214037db66b62) | + on-chain wallet index (getCirclesByMember/Creator); **current** — deploy block 68_960_127 |
 
 ## Contract: SavingsCircles v2 (`contracts/SavingsCircles.sol`)
 

@@ -1,13 +1,20 @@
 {
-  "contractAddress": "0xc7bb731ac10a15955017d6a5fe63d62ec526f661",
+  "contractAddress": "0xaa433394d212a4d2257b634a6da214037db66b62",
   "network": "ARC-TESTNET",
   "deployerWalletId": "3c2464b2-8369-52e2-a782-800bbeca5396",
   "contract_code_path": "/home/user/app/contracts/SavingsCircles.sol",
   "contract_compiled_code_path": "/home/user/app/contracts/out/SavingsCircles.sol/SavingsCircles.json",
   "contract_network_and_links": {
-    "Arc Testnet": "https://explorer.testnet.arc.io/address/0xc7bb731ac10a15955017d6a5fe63d62ec526f661"
+    "Arc Testnet": "https://explorer.testnet.arc.io/address/0xaa433394d212a4d2257b634a6da214037db66b62"
   },
   "contract_deployments": [
+    {
+      "chain": "Arc Testnet",
+      "address": "0xaa433394d212a4d2257b634a6da214037db66b62",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0xaa433394d212a4d2257b634a6da214037db66b62",
+      "txHash": "0x42f80ed5156f35b27472b87e39f0936885ffcb945b04f48721dd83a3266a0814",
+      "deployedAt": "2026-10-22T14:38:54.943Z"
+    },
     {
       "chain": "Arc Testnet",
       "address": "0xc7bb731ac10a15955017d6a5fe63d62ec526f661",
@@ -195,6 +202,44 @@
               "internalType": "uint256"
             }
           ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "getCirclesByCreator",
+      "inputs": [
+        {
+          "name": "wallet",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256[]",
+          "internalType": "uint256[]"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "getCirclesByMember",
+      "inputs": [
+        {
+          "name": "wallet",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256[]",
+          "internalType": "uint256[]"
         }
       ],
       "stateMutability": "view"

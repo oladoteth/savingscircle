@@ -57,7 +57,6 @@ contract SavingsCircles is ReentrancyGuard {
         mapping(address => uint256) paidThisCycle;
         mapping(address => bool)    takenThisCycle;
         // ---- defaulter tracking for current cycle ----
-        // set in settleCycle so we can remove them after payout iteration
         mapping(address => bool) defaultedThisCycle;
     }
 
@@ -68,9 +67,19 @@ contract SavingsCircles is ReentrancyGuard {
     IERC20 public immutable usdc;
     uint256 public nextCircleId;
 
-    mapping(uint256 => Circle)   private circles;
+    mapping(uint256 => Circle)    private circles;
     mapping(address => Reputation) public reputation;
-    mapping(address => uint256)  public claimable;
+    mapping(address => uint256)   public claimable;
+
+    // ---- Wallet membership index (Option B) ----
+    // memberCircles[wallet] = list of circle ids wallet is currently a member of.
+    // memberCircleIndex[wallet][id] = position of id in memberCircles[wallet] + 1
+    //   (1-based so that 0 means "not present").
+    mapping(address => uint256[])           private memberCircles;
+    mapping(address => mapping(uint256 => uint256)) private memberCircleIndex;
+
+    // ---- Creator index (append-only) ----
+    mapping(address => uint256[]) private creatorCircles;
 
     // =========================================================================
     // Events
@@ -175,6 +184,9 @@ contract SavingsCircles is ReentrancyGuard {
             }
         }
 
+        // Record creator index (append-only)
+        creatorCircles[msg.sender].push(id);
+
         emit CircleCreated(id, msg.sender, contribution, periodLength, size, depositPeriods, invited.length > 0);
     }
 
@@ -195,6 +207,8 @@ contract SavingsCircles is ReentrancyGuard {
         c.members.push(msg.sender);
         c.deposit[msg.sender]  = depositAmt;
 
+        _indexAdd(msg.sender, id);
+
         usdc.safeTransferFrom(msg.sender, address(this), depositAmt);
 
         emit Joined(id, msg.sender, c.members.length);
@@ -213,6 +227,7 @@ contract SavingsCircles is ReentrancyGuard {
         }
 
         _removeMember(c, msg.sender);
+        _indexRemove(msg.sender, id);
         emit Left(id, msg.sender);
     }
 
@@ -238,20 +253,17 @@ contract SavingsCircles is ReentrancyGuard {
     ///         Callable by anyone while Pending, only after at least one periodLength
     ///         has elapsed since the last settleCycle. Credits the member's remaining
     ///         deposit to claimable and removes them from membership.
-    ///         Purpose: prevents one non-cooperative member from stalling the circle
-    ///         indefinitely by refusing to topUp.
     function removeUnfunded(uint256 id, address member) external nonReentrant {
         Circle storage c = _requireExists(id);
         if (c.state != CircleState.Pending) revert InvalidState();
         if (!c.isMember[member]) revert NotMember();
 
-        // Must have settled at least once and the grace period must have elapsed.
         if (c.settledAt == 0 || block.timestamp < uint256(c.settledAt) + uint256(c.periodLength)) {
             revert GracePeriodNotElapsed();
         }
 
         uint256 full = c.contribution * c.depositPeriods;
-        if (c.deposit[member] >= full) revert DepositAlreadyFull(); // deposit is full, no removal
+        if (c.deposit[member] >= full) revert DepositAlreadyFull();
 
         uint256 dep = c.deposit[member];
         if (dep > 0) {
@@ -260,21 +272,17 @@ contract SavingsCircles is ReentrancyGuard {
         }
 
         _removeMember(c, member);
+        _indexRemove(member, id);
         emit Removed(id, member);
     }
 
     /// @notice Start a new cycle. Callable by anyone when the circle is full
     ///         and every member's deposit is full.
-    ///         After the first cycle, startCycle is gated by a one-period cooldown
-    ///         (block.timestamp >= settledAt + periodLength) so members have time
-    ///         to leave between cycles. The first cycle (settledAt == 0) starts
-    ///         immediately once the circle is full.
     function startCycle(uint256 id) external nonReentrant {
         Circle storage c = _requireExists(id);
         if (c.state != CircleState.Pending) revert InvalidState();
         if (c.members.length != c.size) revert NotEnoughMembers();
 
-        // After the first cycle, enforce a one-period leave window.
         if (c.settledAt != 0 && block.timestamp < uint256(c.settledAt) + uint256(c.periodLength)) {
             revert TooEarlyToStart();
         }
@@ -296,7 +304,6 @@ contract SavingsCircles is ReentrancyGuard {
     // Collection helpers
     // =========================================================================
 
-    /// @dev How many whole contributions are owed right now by `member` (0 if caught up).
     function _owedNow(Circle storage c, address member) internal view returns (uint256) {
         uint256 elapsed  = block.timestamp - c.cycleStart;
         uint256 periods  = elapsed / c.periodLength + 1;
@@ -306,12 +313,9 @@ contract SavingsCircles is ReentrancyGuard {
         return due > paid ? due - paid : 0;
     }
 
-    /// @dev Pull as many whole contributions as balance+allowance allow, up to owed.
-    ///      Returns (amountPulled, lateCount).
-    ///      Never reverts for a single member; wraps transfer in try/catch.
     function _collectOne(
         Circle storage c,
-        uint256, // id — unused; kept so caller signature is uniform
+        uint256,
         address member,
         uint64  nowTs
     ) internal returns (uint256 pulled, uint256 lateCount) {
@@ -342,7 +346,6 @@ contract SavingsCircles is ReentrancyGuard {
             pulled = toPull;
         }
 
-        // Classify late vs on-time
         uint256 toPullContribs2 = pulled / contrib;
         uint256 curPeriod;
         {
@@ -368,16 +371,12 @@ contract SavingsCircles is ReentrancyGuard {
     // Collect / Pay (Active)
     // =========================================================================
 
-    /// @notice Autopay: pull owed contributions for every member who can pay.
-    ///         Safe to call at any time while Active. One member's failure
-    ///         never reverts the call for others.
     function collect(uint256 id) external nonReentrant {
         Circle storage c = _requireExists(id);
         if (c.state != CircleState.Active) revert InvalidState();
         _collectAll(c, id, uint64(block.timestamp));
     }
 
-    /// @notice Manual pay: pull owed contributions for msg.sender only.
     function pay(uint256 id) external nonReentrant {
         Circle storage c = _requireExists(id);
         if (c.state != CircleState.Active) revert InvalidState();
@@ -393,7 +392,6 @@ contract SavingsCircles is ReentrancyGuard {
         }
     }
 
-    /// @dev Collect all members. Emits Collected/Missed per member.
     function _collectAll(Circle storage c, uint256 id, uint64 nowTs) internal {
         uint256 len = c.members.length;
         for (uint256 i; i < len; ++i) {
@@ -413,20 +411,11 @@ contract SavingsCircles is ReentrancyGuard {
     // Payout request (Active)
     // =========================================================================
 
-    /// @notice Request the payout for this cycle.
-    ///         Each member may take the payout once per cycle, whenever they
-    ///         need it. Runs collect() first, then checks:
-    ///         - member has not already taken the payout this cycle (AlreadyTaken)
-    ///         - member owes nothing (HasArrears)
-    ///         - pot >= payout (PotTooSmall)
-    ///         takenThisCycle[member] is the correct per-member guard; multiple
-    ///         members may each take one payout per cycle as the pot refills.
     function request(uint256 id) external nonReentrant {
         Circle storage c = _requireExists(id);
         if (c.state != CircleState.Active) revert InvalidState();
         if (!c.isMember[msg.sender]) revert NotMember();
 
-        // Run collect for everyone first
         _collectAll(c, id, uint64(block.timestamp));
 
         if (c.takenThisCycle[msg.sender]) revert AlreadyTaken();
@@ -444,13 +433,6 @@ contract SavingsCircles is ReentrancyGuard {
     // Settle cycle (Active, after grace period)
     // =========================================================================
 
-    /// @notice Settle the cycle once now >= cycleStart + size * periodLength.
-    ///         Runs collect, deducts deposits for arrears, pays out remaining members,
-    ///         removes defaulters, resets per-cycle data, returns to Pending.
-    ///         Invariant: pot == 0 after settleCycle. Any residual (e.g. from arrears
-    ///         deduction when all members already took mid-cycle) is credited to the
-    ///         last member paid, or split equally among all surviving members if nobody
-    ///         was paid in this settlement. pot is never silently zeroed.
     function settleCycle(uint256 id) external nonReentrant {
         Circle storage c = _requireExists(id);
         if (c.state != CircleState.Active) revert InvalidState();
@@ -458,12 +440,11 @@ contract SavingsCircles is ReentrancyGuard {
         uint256 settleTime = uint256(c.cycleStart) + uint256(c.size) * uint256(c.periodLength);
         if (block.timestamp < settleTime) revert TooEarlyToSettle();
 
-        // Collect what's left
         _collectAll(c, id, uint64(block.timestamp));
 
         uint256 len = c.members.length;
 
-        // ---- Handle arrears: deduct deposit or record default ----
+        // ---- Handle arrears ----
         for (uint256 i; i < len; ++i) {
             address member = c.members[i];
             uint256 owed   = _owedNow(c, member);
@@ -471,13 +452,11 @@ contract SavingsCircles is ReentrancyGuard {
 
             uint256 dep = c.deposit[member];
             if (dep >= owed) {
-                // Deposit covers all arrears
                 c.deposit[member]       = dep - owed;
                 c.paidThisCycle[member] += owed;
                 c.pot                   += owed;
                 reputation[member].missedPayments += owed / c.contribution;
             } else {
-                // Deposit only partially covers — default
                 if (dep > 0) {
                     c.pot                   += dep;
                     c.paidThisCycle[member] += dep;
@@ -490,15 +469,7 @@ contract SavingsCircles is ReentrancyGuard {
             }
         }
 
-        // ---- Pay out members who haven't taken the payout ----
-        // Tier 1: non-defaulters who haven't taken payout.
-        // Tier 2: defaulters who haven't taken payout.
-        // Within each tier, split pot equally (min(payout, pot/count)).
-        // The last member in each tier receives the pot remainder to absorb dust.
-        // Defaulters must never be paid before non-defaulters.
-        // After both tiers, any residual pot (e.g. all members already took mid-cycle)
-        // is credited to the last member paid in any tier, maintaining pot == 0.
-
+        // ---- Pay out members ----
         uint256 tier1Count;
         uint256 tier2Count;
         for (uint256 i; i < len; ++i) {
@@ -511,9 +482,8 @@ contract SavingsCircles is ReentrancyGuard {
             }
         }
 
-        address lastPaid; // track last member paid across both tiers for dust sweep
+        address lastPaid;
 
-        // Pay tier 1 first
         if (tier1Count > 0 && c.pot > 0) {
             uint256 shareEach = c.payout < c.pot / tier1Count ? c.payout : c.pot / tier1Count;
             uint256 paid1;
@@ -524,8 +494,6 @@ contract SavingsCircles is ReentrancyGuard {
                 paid1++;
                 uint256 share;
                 if (paid1 == tier1Count) {
-                    // Last tier-1 member: receives the lesser of payout and remaining pot.
-                    // The dust sweep below handles any surplus beyond payout.
                     share = c.pot < c.payout ? c.pot : c.payout;
                 } else {
                     share = shareEach;
@@ -539,7 +507,6 @@ contract SavingsCircles is ReentrancyGuard {
             }
         }
 
-        // Pay tier 2 (defaulters) with whatever remains
         if (tier2Count > 0 && c.pot > 0) {
             uint256 potForDefaulters = c.pot;
             uint256 shareEach        = potForDefaulters / tier2Count;
@@ -551,7 +518,7 @@ contract SavingsCircles is ReentrancyGuard {
                 paid2++;
                 uint256 share;
                 if (paid2 == tier2Count) {
-                    share = c.pot; // last defaulter gets the dust
+                    share = c.pot;
                 } else {
                     share = shareEach;
                 }
@@ -564,23 +531,17 @@ contract SavingsCircles is ReentrancyGuard {
             }
         }
 
-        // ---- Dust sweep: credit any residual pot (cannot be left in contract) ----
-        // Residual arises when all members already took the payout mid-cycle and
-        // settlement's arrears deduction adds to the pot with no tier recipients.
+        // ---- Dust sweep ----
         if (c.pot > 0) {
             if (lastPaid != address(0)) {
-                // Credit residual to the last member paid this settlement.
                 claimable[lastPaid] += c.pot;
                 c.pot = 0;
             } else {
-                // Nobody was paid in settlement tiers (all took mid-cycle or all defaulted
-                // and pot = 0 going in). Split equally among surviving non-defaulting members.
-                // If every member defaulted, credit to all members before removal.
                 uint256 survivorCount;
                 for (uint256 i; i < len; ++i) {
                     if (!c.defaultedThisCycle[c.members[i]]) survivorCount++;
                 }
-                if (survivorCount == 0) survivorCount = len; // all defaulted — use full list
+                if (survivorCount == 0) survivorCount = len;
                 uint256 dustEach = c.pot / survivorCount;
                 uint256 dustPaid;
                 for (uint256 i; i < len; ++i) {
@@ -596,20 +557,13 @@ contract SavingsCircles is ReentrancyGuard {
                 }
             }
         }
-        // pot is now guaranteed to be 0.
 
         // ---- Cycle completion credits & remove defaulters ----
-        uint256 defaulterCount;
-        for (uint256 i; i < len; ++i) {
-            if (c.defaultedThisCycle[c.members[i]]) defaulterCount++;
-        }
-
         for (uint256 i; i < len; ++i) {
             address member = c.members[i];
             if (!c.defaultedThisCycle[member]) {
                 reputation[member].cyclesCompleted++;
             } else {
-                // Return any remaining deposit to defaulter (should already be 0)
                 uint256 dep = c.deposit[member];
                 if (dep > 0) {
                     claimable[member] += dep;
@@ -618,19 +572,15 @@ contract SavingsCircles is ReentrancyGuard {
             }
         }
 
-        // Remove defaulters from membership (iterate backwards to preserve indices)
-        if (defaulterCount > 0) {
-            for (uint256 i = len; i > 0; ) {
-                unchecked { --i; }
-                if (c.defaultedThisCycle[c.members[i]]) {
-                    address defaulter = c.members[i];
-                    for (uint256 j = i; j + 1 < c.members.length; ++j) {
-                        c.members[j] = c.members[j + 1];
-                    }
-                    c.members.pop();
-                    c.isMember[defaulter]            = false;
-                    c.defaultedThisCycle[defaulter]  = false;
-                }
+        // Remove defaulters from membership (backwards to preserve indices during removal)
+        uint256 curLen = c.members.length;
+        for (uint256 i = curLen; i > 0; ) {
+            unchecked { --i; }
+            address member = c.members[i];
+            if (c.defaultedThisCycle[member]) {
+                _removeMember(c, member);
+                _indexRemove(member, id);
+                c.defaultedThisCycle[member] = false;
             }
         }
 
@@ -643,7 +593,7 @@ contract SavingsCircles is ReentrancyGuard {
             c.paidThisCycle[member]  = 0;
             c.takenThisCycle[member] = false;
         }
-        c.pot       = 0; // invariant already holds; explicit reset for clarity
+        c.pot       = 0;
         c.settledAt = uint64(block.timestamp);
         c.state     = CircleState.Pending;
 
@@ -654,7 +604,6 @@ contract SavingsCircles is ReentrancyGuard {
     // Withdraw
     // =========================================================================
 
-    /// @notice Pull claimable USDC.
     function withdraw() external nonReentrant {
         uint256 amount = claimable[msg.sender];
         if (amount == 0) revert NothingToWithdraw();
@@ -678,8 +627,8 @@ contract SavingsCircles is ReentrancyGuard {
         uint32  cycle;
         uint64  cycleStart;
         uint64  settledAt;
-        uint256 currentPeriod;  // 0-indexed; 0 if Pending
-        uint64  nextDueTime;    // 0 if Pending
+        uint256 currentPeriod;
+        uint64  nextDueTime;
         uint256 pot;
     }
 
@@ -733,6 +682,16 @@ contract SavingsCircles is ReentrancyGuard {
         return c.inviteList[member];
     }
 
+    /// @notice Returns the circle ids that `wallet` is currently a member of.
+    function getCirclesByMember(address wallet) external view returns (uint256[] memory) {
+        return memberCircles[wallet];
+    }
+
+    /// @notice Returns the circle ids that `wallet` has created (append-only; never shrinks).
+    function getCirclesByCreator(address wallet) external view returns (uint256[] memory) {
+        return creatorCircles[wallet];
+    }
+
     // =========================================================================
     // Internal helpers
     // =========================================================================
@@ -742,6 +701,34 @@ contract SavingsCircles is ReentrancyGuard {
         return circles[id];
     }
 
+    /// @dev Add `id` to `wallet`'s member index.
+    function _indexAdd(address wallet, uint256 id) internal {
+        memberCircles[wallet].push(id);
+        // Store 1-based position so 0 unambiguously means "not indexed".
+        memberCircleIndex[wallet][id] = memberCircles[wallet].length;
+    }
+
+    /// @dev Remove `id` from `wallet`'s member index using swap-and-pop.
+    function _indexRemove(address wallet, uint256 id) internal {
+        uint256 pos1 = memberCircleIndex[wallet][id]; // 1-based
+        if (pos1 == 0) return; // not in index (defensive)
+
+        uint256 idx  = pos1 - 1;
+        uint256[] storage arr = memberCircles[wallet];
+        uint256 last = arr[arr.length - 1];
+
+        if (last != id) {
+            // Swap the target with the last element
+            arr[idx] = last;
+            memberCircleIndex[wallet][last] = pos1; // update last's 1-based index
+        }
+        arr.pop();
+        delete memberCircleIndex[wallet][id];
+    }
+
+    /// @dev Remove `member` from a circle's member list using linear scan + shift.
+    ///      Also clears isMember. Does NOT update the wallet index — caller must
+    ///      call _indexRemove separately.
     function _removeMember(Circle storage c, address member) internal {
         c.isMember[member] = false;
         uint256 len = c.members.length;

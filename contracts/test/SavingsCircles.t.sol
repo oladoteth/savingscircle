@@ -1213,6 +1213,233 @@ contract SavingsCirclesTest is Test {
         assertEq(sc.getCircle(id).cycle, 2, "cycle 2 started");
     }
 
+    // =======================================================================
+    // Test 17 — Wallet membership index: getCirclesByMember tracks all four
+    //           membership-change paths (join, leave, removeUnfunded, default).
+    //           Multi-circle: a wallet in several circles leaving one keeps the
+    //           others in the correct set.
+    // =======================================================================
+    function test_memberIndex_joinAndLeave() public {
+        _fund(alice, 800e6);
+        _fund(bob,   800e6);
+        _fund(carol, 800e6);
+
+        // Alice joins two circles, then leaves one.
+        uint256 id0 = _createCircle(2, 1);
+        uint256 id1 = _createCircle(2, 1);
+        uint256 id2 = _createCircle(2, 1);
+
+        vm.prank(alice); sc.join(id0);
+        vm.prank(alice); sc.join(id1);
+        vm.prank(alice); sc.join(id2);
+
+        // Index should contain all three
+        uint256[] memory circles = sc.getCirclesByMember(alice);
+        assertEq(circles.length, 3, "alice in 3 circles");
+        _assertContains(circles, id0, "id0");
+        _assertContains(circles, id1, "id1");
+        _assertContains(circles, id2, "id2");
+
+        // Alice leaves id1 (the middle one — tests swap-and-pop correctness)
+        vm.prank(alice); sc.leave(id1);
+
+        circles = sc.getCirclesByMember(alice);
+        assertEq(circles.length, 2, "alice in 2 circles after leaving id1");
+        _assertContains(circles,    id0, "id0 still present");
+        _assertContains(circles,    id2, "id2 still present");
+        _assertNotContains(circles, id1, "id1 removed");
+    }
+
+    function test_memberIndex_removeUnfunded() public {
+        address fa = makeAddr("fa_idx");
+        address fb = makeAddr("fb_idx");
+        address fc = makeAddr("fc_idx");
+
+        usdc.mint(fa, 200e6); vm.prank(fa); usdc.approve(address(sc), type(uint256).max);
+        usdc.mint(fb, 800e6); vm.prank(fb); usdc.approve(address(sc), type(uint256).max);
+        usdc.mint(fc, 800e6); vm.prank(fc); usdc.approve(address(sc), type(uint256).max);
+
+        uint256 id = sc.createCircle(CONTRIBUTION, PERIOD_LENGTH, 3, 2, new address[](0));
+        vm.prank(fa); sc.join(id);
+        vm.prank(fb); sc.join(id);
+        vm.prank(fc); sc.join(id);
+
+        // fa should appear in index after join
+        {
+            uint256[] memory circles = sc.getCirclesByMember(fa);
+            assertEq(circles.length, 1, "fa in 1 circle");
+            assertEq(circles[0], id, "fa indexed at id");
+        }
+
+        // Run cycle so fa's deposit is consumed at settle
+        sc.startCycle(id);
+        uint64 cs = sc.getCircle(id).cycleStart;
+        vm.warp(uint256(cs) + 2 * PERIOD_LENGTH);
+        usdc.mint(fa, 100e6);
+        vm.prank(fa); sc.pay(id);
+        vm.warp(uint256(cs) + 3 * PERIOD_LENGTH + 1);
+        sc.collect(id);
+        vm.prank(fb); sc.request(id);
+        vm.prank(fc); sc.request(id);
+        sc.settleCycle(id);
+
+        // Grace period then removeUnfunded
+        vm.warp(block.timestamp + PERIOD_LENGTH + 1);
+        sc.removeUnfunded(id, fa);
+
+        // fa should be removed from index
+        {
+            uint256[] memory circles = sc.getCirclesByMember(fa);
+            assertEq(circles.length, 0, "fa removed from index after removeUnfunded");
+        }
+    }
+
+    function test_memberIndex_defaultRemoval() public {
+        _fund(alice, 200e6); // exactly deposit + period0 — will default
+        _fund(bob,   400e6);
+        _fund(carol, 400e6);
+
+        uint256 id = _createCircle(3, 1);
+        vm.prank(alice); sc.join(id);
+        vm.prank(bob);   sc.join(id);
+        vm.prank(carol); sc.join(id);
+        sc.startCycle(id);
+
+        uint64 cs = sc.getCircle(id).cycleStart;
+        sc.collect(id);
+        vm.prank(alice); sc.request(id); // alice takes payout, then has 0 left
+        // alice wallet is now 0 USDC (200 - 100 deposit - 100 period0 = 0)
+        assertEq(usdc.balanceOf(alice), 0);
+
+        vm.warp(uint256(cs) + PERIOD_LENGTH);
+        sc.collect(id);
+        vm.warp(uint256(cs) + 2 * PERIOD_LENGTH);
+        sc.collect(id);
+
+        // index before settle — alice should be a member
+        {
+            uint256[] memory circles = sc.getCirclesByMember(alice);
+            assertEq(circles.length, 1, "alice in index before settle");
+        }
+
+        vm.warp(uint256(cs) + 3 * PERIOD_LENGTH + 1);
+        sc.settleCycle(id);
+
+        // alice defaulted → removed from index
+        {
+            uint256[] memory circles = sc.getCirclesByMember(alice);
+            assertEq(circles.length, 0, "alice removed from index after default");
+        }
+
+        // bob and carol still indexed
+        {
+            uint256[] memory circles = sc.getCirclesByMember(bob);
+            assertEq(circles.length, 1, "bob still indexed");
+        }
+    }
+
+    function test_memberIndex_multiCircleSwapAndPop() public {
+        // Alice joins 4 circles. Leaves them in a non-sequential order to
+        // exercise every swap-and-pop branch:
+        //   - leave last (no swap needed)
+        //   - leave first (last moves to front)
+        //   - leave middle
+        _fund(alice, 2000e6);
+        _fund(bob,   2000e6);
+
+        uint256 id0 = _createCircle(2, 1);
+        uint256 id1 = _createCircle(2, 1);
+        uint256 id2 = _createCircle(2, 1);
+        uint256 id3 = _createCircle(2, 1);
+
+        vm.prank(alice); sc.join(id0);
+        vm.prank(alice); sc.join(id1);
+        vm.prank(alice); sc.join(id2);
+        vm.prank(alice); sc.join(id3);
+        // Index: [id0, id1, id2, id3]
+
+        // Leave id3 (last) — simple pop, no swap
+        vm.prank(alice); sc.leave(id3);
+        {
+            uint256[] memory c = sc.getCirclesByMember(alice);
+            assertEq(c.length, 3);
+            _assertContains(c, id0); _assertContains(c, id1); _assertContains(c, id2);
+            _assertNotContains(c, id3);
+        }
+
+        // Leave id0 (first) — id2 moves to index 0
+        vm.prank(alice); sc.leave(id0);
+        {
+            uint256[] memory c = sc.getCirclesByMember(alice);
+            assertEq(c.length, 2);
+            _assertContains(c, id1); _assertContains(c, id2);
+            _assertNotContains(c, id0);
+        }
+
+        // Leave id1 (first now) — id2 moves
+        vm.prank(alice); sc.leave(id1);
+        {
+            uint256[] memory c = sc.getCirclesByMember(alice);
+            assertEq(c.length, 1);
+            assertEq(c[0], id2);
+        }
+
+        // Leave last one
+        vm.prank(alice); sc.leave(id2);
+        assertEq(sc.getCirclesByMember(alice).length, 0, "alice index empty");
+    }
+
+    // =======================================================================
+    // Test 18 — Creator index: getCirclesByCreator lists created circles.
+    // =======================================================================
+    function test_creatorIndex() public {
+        uint256 id0 = sc.createCircle(CONTRIBUTION, PERIOD_LENGTH, 2, 1, new address[](0));
+        uint256 id1 = sc.createCircle(CONTRIBUTION, PERIOD_LENGTH, 3, 1, new address[](0));
+        uint256 id2 = sc.createCircle(CONTRIBUTION, PERIOD_LENGTH, 4, 1, new address[](0));
+
+        uint256[] memory created = sc.getCirclesByCreator(address(this));
+        assertEq(created.length, 3, "3 circles created");
+        assertEq(created[0], id0, "id0 first");
+        assertEq(created[1], id1, "id1 second");
+        assertEq(created[2], id2, "id2 third");
+
+        // Creator index is append-only — even after joining and leaving,
+        // the creator index still lists the circles.
+        _fund(alice, 400e6);
+        vm.prank(alice); sc.join(id0);
+        vm.prank(address(this)); // address(this) is the test contract; not how createCircle works
+        // The circles were created by address(this) (the test contract).
+        // Verify the count remains 3 and is unaffected by joins/leaves.
+        created = sc.getCirclesByCreator(address(this));
+        assertEq(created.length, 3, "creator index unchanged after joins");
+    }
+
+    // -----------------------------------------------------------------------
+    // Index assertion helpers
+    // -----------------------------------------------------------------------
+    function _assertContains(uint256[] memory arr, uint256 val) internal pure {
+        for (uint256 i; i < arr.length; ++i) {
+            if (arr[i] == val) return;
+        }
+        revert("array does not contain value");
+    }
+    function _assertContains(uint256[] memory arr, uint256 val, string memory label) internal pure {
+        for (uint256 i; i < arr.length; ++i) {
+            if (arr[i] == val) return;
+        }
+        revert(label);
+    }
+    function _assertNotContains(uint256[] memory arr, uint256 val) internal pure {
+        for (uint256 i; i < arr.length; ++i) {
+            if (arr[i] == val) revert("array unexpectedly contains value");
+        }
+    }
+    function _assertNotContains(uint256[] memory arr, uint256 val, string memory label) internal pure {
+        for (uint256 i; i < arr.length; ++i) {
+            if (arr[i] == val) revert(label);
+        }
+    }
+
     function test_startCycleCooldown_memberCanLeave() public {
         _fund(alice, 700e6);
         _fund(bob,   700e6);

@@ -243,4 +243,14 @@ export const SAVINGS_CIRCLES_ABI = [
     inputs:  [],
     outputs: [{ name: "", type: "address" }],
   },
+  {
+    type: "function", name: "getCirclesByMember", stateMutability: "view",
+    inputs:  [{ name: "wallet", type: "address" }],
+    outputs: [{ name: "", type: "uint256[]" }],
+  },
+  {
+    type: "function", name: "getCirclesByCreator", stateMutability: "view",
+    inputs:  [{ name: "wallet", type: "address" }],
+    outputs: [{ name: "", type: "uint256[]" }],
+  },
 ] as const;

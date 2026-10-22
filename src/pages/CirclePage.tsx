@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from 'wagmi';
+import { ConnectKitButton } from 'connectkit';
 import { erc20Abi } from 'viem';
-import { ArrowLeft, Link as LinkIcon, Users, ChevronRight } from 'lucide-react';
+import { ArrowLeft, Link as LinkIcon, Users, ChevronRight, Loader2 } from 'lucide-react';
 import { SAVINGS_CIRCLES_ABI } from '@/abi';
-import { CONTRACT_ADDRESS, CHAIN_ID, USDC_ADDRESS } from '@/appConfig';
-import { useCircle, useMemberInfo, useAllMemberInfos, useUsdcAllowance } from '@/hooks/useCircle';
+import { CONTRACT_ADDRESS, CHAIN_ID, USDC_ADDRESS, USDC_DECIMALS } from '@/appConfig';
+import { useCircle, useMemberInfo, useAllMemberInfos, useUsdcAllowance, useUsdcBalance } from '@/hooks/useCircle';
 import { useCircleEvents, ActivityItem } from '@/hooks/useCircleEvents';
+import { useInvalidateAll } from '@/hooks/useInvalidateAll';
 import { formatUsdc, shortAddr, formatCountdown, formatPeriodLength, buildExplorerTxUrl, buildExplorerAddrUrl } from '@/utils/format';
 import { TxButton } from '@/components/shared/TxButton';
 import { ReceiptLink } from '@/components/shared/ReceiptLink';
@@ -77,27 +79,34 @@ function useApproveFlow() {
 }
 
 export default function CirclePage({ circleId: id, onNavigate }: Props) {
-  const { address, chainId } = useAccount();
+  const { address, chainId, isConnected } = useAccount();
   const { switchChain } = useSwitchChain();
   const now = useNow();
   const [copied, setCopied] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const invalidateAll = useInvalidateAll();
 
-  const { circle: { data: c, refetch: refetchCircle }, members: { data: members, refetch: refetchMembers } } = useCircle(id);
+  const { circle: { data: c, refetch: refetchCircle, isFetching: circleFetching }, members: { data: members, refetch: refetchMembers } } = useCircle(id);
   const myInfoQ = useMemberInfo(id, address);
   const allInfos = useAllMemberInfos(id, (members ?? []));
   const { events, loading: eventsLoading, loadingMore: eventsLoadingMore, hasMore: eventsHasMore, error: eventsError, loadOlder: loadOlderEvents } = useCircleEvents(id);
   const { data: allowance, refetch: refetchAllowance } = useUsdcAllowance(address, CONTRACT_ADDRESS);
+  const { data: usdcBalance } = useUsdcBalance(address);
 
   const wrongChain = !!chainId && chainId !== CHAIN_ID;
 
   const refetchAll = useCallback(() => {
+    setIsUpdating(true);
+    invalidateAll();
     void refetchCircle();
     void refetchMembers();
     void myInfoQ.refetch();
     void refetchAllowance();
-  }, [refetchCircle, refetchMembers, myInfoQ, refetchAllowance]);
+    // Clear updating state after 3s (wagmi invalidation takes time)
+    setTimeout(() => setIsUpdating(false), 3_000);
+  }, [refetchCircle, refetchMembers, myInfoQ, refetchAllowance, invalidateAll]);
 
-  // Single write (collect, pay, request, settle, leave, startCycle, removeUnfunded, autopay approve)
+  // Single write (collect, pay, request, settle, leave, startCycle, removeUnfunded)
   const { writeContract: singleW, data: singleHash, isPending: singlePending, error: singleErr, reset: singleReset } = useWriteContract();
   const { isLoading: singleConfirming, isSuccess: singleSuccess } = useWaitForTransactionReceipt({ hash: singleHash });
   useEffect(() => { if (singleSuccess) { refetchAll(); singleReset(); } }, [singleSuccess, refetchAll, singleReset]);
@@ -169,16 +178,30 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
     void navigator.clipboard.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
   }
 
+  // ── Loading skeleton ──────────────────────────────────────────────────────────
   if (!c) {
     return (
-      <div className="min-h-dvh flex items-center justify-center" style={{ background: 'var(--bg-gradient)' }}>
-        <p className="text-sm" style={{ color: 'var(--muted)' }}>Loading circle…</p>
+      <div className="min-h-dvh" style={{ background: 'var(--bg-gradient)' }}>
+        <div className="mx-auto max-w-md px-4 pt-6 pb-24">
+          <div className="flex items-center justify-between mb-5">
+            <button onClick={() => onNavigate('/')} className="flex items-center gap-1.5 text-sm" style={{ color: 'var(--muted)' }}>
+              <ArrowLeft className="size-4" /> Home
+            </button>
+            <ConnectKitButton />
+          </div>
+          <div className="space-y-3">
+            <div className="h-48 rounded-3xl animate-pulse" style={{ background: 'var(--surface-muted)' }} />
+            <div className="h-32 rounded-2xl animate-pulse" style={{ background: 'var(--surface-muted)' }} />
+            <div className="h-24 rounded-2xl animate-pulse" style={{ background: 'var(--surface-muted)' }} />
+          </div>
+        </div>
       </div>
     );
   }
 
   const isActive  = c.state === 1;
   const isPending = c.state === 0;
+  const isBetweenCycles = isPending && c.cycle > 0;
   const myInfo    = myInfoQ.data;
   const isMember  = myInfo?.isMember ?? false;
   const owedNow   = myInfo?.owedNow ?? 0n;
@@ -202,17 +225,35 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
 
   const graceElapsed = Number(c.settledAt) > 0 && BigInt(now) >= c.settledAt + c.periodLength;
 
-  // Between-cycles cooldown: after cycle 1+, startCycle is gated by settledAt + periodLength.
+  // Between-cycles cooldown
   const hasPrevCycle      = Number(c.settledAt) > 0;
   const startWindowOpens  = hasPrevCycle ? Number(c.settledAt) + Number(c.periodLength) : 0;
   const inCooldown        = isPending && hasPrevCycle && now < startWindowOpens;
   const cooldownSecsLeft  = inCooldown ? startWindowOpens - now : 0;
 
-  const stateStr = isPending
-    ? `Forming ${c.memberCount}/${c.size}`
-    : `Cycle ${c.cycle} running — period ${Number(c.currentPeriod) + 1}/${c.size}`;
+  // ── Fix 6: between-cycles state label ───────────────────────────────────────
+  const stateStr = isBetweenCycles
+    ? 'Between cycles'
+    : isPending
+      ? `Forming ${c.memberCount}/${c.size}`
+      : `Cycle ${c.cycle} running — period ${Number(c.currentPeriod) + 1}/${c.size}`;
 
   const canRequest = isMember && isActive && !taken && owedNow === 0n && c.pot >= c.payout;
+
+  // ── Fix 5: funds warning ─────────────────────────────────────────────────────
+  const FEE_BUFFER = BigInt(Math.round(0.01 * 10 ** USDC_DECIMALS));
+  const bal = usdcBalance ?? 0n;
+
+  // What the member still needs this cycle (contributions remaining + deposit gap)
+  const contribStillNeeded = isActive ? remaining : 0n;
+  const totalNeeded = contribStillNeeded + depositGap + FEE_BUFFER;
+  const showFundsWarning = isConnected && isMember && totalNeeded > 0n && bal < totalNeeded;
+  const shortfall = totalNeeded > bal ? totalNeeded - bal : 0n;
+
+  // Funds warning for joining (non-member, Pending)
+  const joinNeeded = isPending && !isMember && c ? c.contribution * BigInt(c.depositPeriods) + FEE_BUFFER : 0n;
+  const showJoinFundsWarning = isConnected && isPending && !isMember && joinNeeded > bal;
+  const joinShortfall = joinNeeded > bal ? joinNeeded - bal : 0n;
 
   return (
     <div className="min-h-dvh" style={{ background: 'var(--bg-gradient)' }}>
@@ -222,13 +263,19 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
           <button onClick={() => onNavigate('/')} className="flex items-center gap-1.5 text-sm" style={{ color: 'var(--muted)' }}>
             <ArrowLeft className="size-4" /> Home
           </button>
-          <button
-            onClick={copyLink}
-            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl"
-            style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--ink-2)' }}
-          >
-            <LinkIcon className="size-3" />{copied ? 'Copied' : 'Copy link'}
-          </button>
+          <div className="flex items-center gap-2">
+            {circleFetching && (
+              <Loader2 className="size-4 animate-spin" style={{ color: 'var(--subtle)' }} />
+            )}
+            <button
+              onClick={copyLink}
+              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl"
+              style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--ink-2)' }}
+            >
+              <LinkIcon className="size-3" />{copied ? 'Copied' : 'Copy link'}
+            </button>
+            <ConnectKitButton />
+          </div>
         </div>
 
         <WrongChainBanner chainId={chainId} />
@@ -236,8 +283,8 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
         {/* Hero */}
         <section className="rounded-3xl p-5 mb-4" style={glass.card}>
           <span className="text-xs font-semibold px-2 py-0.5 rounded-lg mb-3 inline-block" style={{
-            background: isActive ? 'rgba(26,128,71,0.12)' : 'var(--surface-muted)',
-            color: isActive ? 'var(--success)' : 'var(--muted)',
+            background: isActive ? 'rgba(26,128,71,0.12)' : isBetweenCycles ? 'rgba(251,191,36,0.12)' : 'var(--surface-muted)',
+            color: isActive ? 'var(--success)' : isBetweenCycles ? '#d97706' : 'var(--muted)',
           }}>
             {stateStr}
           </span>
@@ -267,6 +314,11 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
             {c.pot >= c.payout && (
               <p className="text-xs font-semibold mt-1" style={{ color: 'var(--success)' }}>Payout available now</p>
             )}
+            {isUpdating && (
+              <p className="text-xs mt-1 flex items-center gap-1" style={{ color: 'var(--subtle)' }}>
+                <Loader2 className="size-3 animate-spin" /> Updated just now
+              </p>
+            )}
           </div>
 
           {isActive && nextDue > 0 && (
@@ -289,8 +341,29 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
           )}
         </section>
 
-        {/* My actions */}
-        {address && (
+        {/* Funds warning */}
+        {showFundsWarning && (
+          <div className="rounded-2xl px-4 py-3 mb-4 flex items-start gap-2" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
+            <p className="text-xs" style={{ color: 'var(--danger)' }}>
+              You need <span className="font-semibold">{formatUsdc(shortfall)} more USDC</span> to stay current this cycle (contributions remaining + deposit top-up + fees).
+            </p>
+          </div>
+        )}
+        {showJoinFundsWarning && (
+          <div className="rounded-2xl px-4 py-3 mb-4 flex items-start gap-2" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
+            <p className="text-xs" style={{ color: 'var(--danger)' }}>
+              You need <span className="font-semibold">{formatUsdc(joinShortfall)} more USDC</span> to join (deposit + fees).
+            </p>
+          </div>
+        )}
+
+        {/* My actions — shown when connected; "Connect to join" when not */}
+        {!isConnected ? (
+          <section className="rounded-2xl p-5 mb-4 text-center" style={glass.card}>
+            <p className="text-sm mb-3" style={{ color: 'var(--muted)' }}>Connect your wallet to join or interact with this circle.</p>
+            <ConnectKitButton />
+          </section>
+        ) : (
           <section className="rounded-2xl p-4 mb-4 space-y-3" style={glass.card}>
             <h3 className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--muted)' }}>My actions</h3>
 
@@ -307,6 +380,7 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
                 }
                 isPending={singlePending}
                 isConfirming={singleConfirming}
+                isUpdating={isUpdating}
                 fullWidth
               />
             )}
@@ -334,6 +408,7 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
                     variant={autopayCoversRest ? 'secondary' : 'primary'}
                     isPending={singlePending}
                     isConfirming={singleConfirming}
+                    isUpdating={isUpdating}
                   />
                 </div>
               </div>
@@ -345,6 +420,7 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
                 onClick={() => doSingle('pay')}
                 isPending={singlePending}
                 isConfirming={singleConfirming}
+                isUpdating={isUpdating}
                 variant="secondary"
                 fullWidth
               />
@@ -356,6 +432,7 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
                 onClick={() => doSingle('collect')}
                 isPending={singlePending}
                 isConfirming={singleConfirming}
+                isUpdating={isUpdating}
                 variant="secondary"
                 fullWidth
               />
@@ -367,6 +444,7 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
                 onClick={() => doSingle('settleCycle')}
                 isPending={singlePending}
                 isConfirming={singleConfirming}
+                isUpdating={isUpdating}
                 variant="secondary"
                 fullWidth
               />
@@ -378,6 +456,7 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
                 onClick={handleJoin}
                 isPending={joinF.isPending}
                 isConfirming={joinF.isConfirming}
+                isUpdating={isUpdating}
                 fullWidth
               />
             )}
@@ -387,6 +466,7 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
                 onClick={handleTopUp}
                 isPending={topF.isPending}
                 isConfirming={topF.isConfirming}
+                isUpdating={isUpdating}
                 variant="secondary"
                 fullWidth
               />
@@ -397,6 +477,7 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
                 onClick={() => doSingle('leave')}
                 isPending={singlePending}
                 isConfirming={singleConfirming}
+                isUpdating={isUpdating}
                 variant="ghost"
                 fullWidth
               />
@@ -409,6 +490,7 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
                 disabledReason={inCooldown ? `Cooldown: starts in ${formatCountdown(cooldownSecsLeft)}` : undefined}
                 isPending={singlePending}
                 isConfirming={singleConfirming}
+                isUpdating={isUpdating}
                 variant="secondary"
                 fullWidth
               />
@@ -424,60 +506,68 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
           <h3 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: 'var(--muted)' }}>
             Members ({String(c.memberCount)}/{c.size})
           </h3>
-          <div className="space-y-2">
-            {(members ?? []).map((m, i) => {
-              const info = allInfos.data?.[i]?.result;
-              const isMe = address && m.toLowerCase() === address.toLowerCase();
-              const mDepFull = info ? info.deposit >= fullDeposit : false;
-              const showRemove = isPending && graceElapsed && !!info && !mDepFull;
+          {members === undefined ? (
+            <div className="space-y-2">
+              {Array.from({ length: Number(c.memberCount) || 2 }).map((_, i) => (
+                <div key={i} className="h-16 rounded-2xl animate-pulse" style={{ background: 'var(--surface-muted)' }} />
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {(members ?? []).map((m, i) => {
+                const info = allInfos.data?.[i]?.result;
+                const isMe = address && m.toLowerCase() === address.toLowerCase();
+                const mDepFull = info ? info.deposit >= fullDeposit : false;
+                const showRemove = isPending && graceElapsed && !!info && !mDepFull;
 
-              return (
-                <div key={m} className="rounded-2xl px-4 py-3" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-                  <div className="flex items-center justify-between gap-2">
-                    <button onClick={() => onNavigate(`/member/${m}`)} className="flex items-center gap-2 min-w-0">
-                      <div className="size-8 rounded-xl flex items-center justify-center text-xs font-bold shrink-0" style={{ background: 'var(--surface-muted)', color: 'var(--ink-2)' }}>
-                        {m.slice(2, 4).toUpperCase()}
+                return (
+                  <div key={m} className="rounded-2xl px-4 py-3" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                    <div className="flex items-center justify-between gap-2">
+                      <button onClick={() => onNavigate(`/member/${m}`)} className="flex items-center gap-2 min-w-0">
+                        <div className="size-8 rounded-xl flex items-center justify-center text-xs font-bold shrink-0" style={{ background: 'var(--surface-muted)', color: 'var(--ink-2)' }}>
+                          {m.slice(2, 4).toUpperCase()}
+                        </div>
+                        <div className="min-w-0 text-left">
+                          <p className="text-sm font-semibold mono truncate" style={{ color: 'var(--ink)' }}>
+                            {isMe ? 'You' : shortAddr(m)}
+                          </p>
+                          <a href={buildExplorerAddrUrl(m)} target="_blank" rel="noreferrer" className="text-xs" style={{ color: 'var(--subtle)' }}>
+                            {shortAddr(m)}
+                          </a>
+                        </div>
+                      </button>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {info?.takenThisCycle && (
+                          <span className="text-xs px-2 py-0.5 rounded-lg font-semibold" style={{ background: 'rgba(26,128,71,0.12)', color: 'var(--success)' }}>
+                            Paid out
+                          </span>
+                        )}
+                        {showRemove && (
+                          <TxButton
+                            label="Remove"
+                            onClick={() => doRemove(m)}
+                            size="sm"
+                            variant="danger"
+                            isPending={singlePending}
+                            isConfirming={singleConfirming}
+                          />
+                        )}
+                        <Users className="size-4" style={{ color: 'var(--subtle)' }} />
                       </div>
-                      <div className="min-w-0 text-left">
-                        <p className="text-sm font-semibold mono truncate" style={{ color: 'var(--ink)' }}>
-                          {isMe ? 'You' : shortAddr(m)}
-                        </p>
-                        <a href={buildExplorerAddrUrl(m)} target="_blank" rel="noreferrer" className="text-xs" style={{ color: 'var(--subtle)' }}>
-                          {shortAddr(m)}
-                        </a>
-                      </div>
-                    </button>
-                    <div className="flex items-center gap-2 shrink-0">
-                      {info?.takenThisCycle && (
-                        <span className="text-xs px-2 py-0.5 rounded-lg font-semibold" style={{ background: 'rgba(26,128,71,0.12)', color: 'var(--success)' }}>
-                          Paid out
-                        </span>
-                      )}
-                      {showRemove && (
-                        <TxButton
-                          label="Remove"
-                          onClick={() => doRemove(m)}
-                          size="sm"
-                          variant="danger"
-                          isPending={singlePending}
-                          isConfirming={singleConfirming}
-                        />
-                      )}
-                      <Users className="size-4" style={{ color: 'var(--subtle)' }} />
                     </div>
+                    {info && (
+                      <div className="mt-2 flex flex-wrap gap-3 text-xs" style={{ color: 'var(--muted)' }}>
+                        <span>Deposit <span className="tabular-nums font-medium" style={{ color: 'var(--ink-2)' }}>{formatUsdc(info.deposit)} USDC</span></span>
+                        {isActive && <span>Paid <span className="tabular-nums font-medium" style={{ color: 'var(--ink-2)' }}>{formatUsdc(info.paidThisCycle)} USDC</span></span>}
+                        {isActive && info.owedNow > 0n && <span style={{ color: 'var(--danger)' }}>Owes <span className="tabular-nums font-medium">{formatUsdc(info.owedNow)} USDC</span></span>}
+                        {isPending && !mDepFull && <span style={{ color: 'var(--danger)' }}>Deposit not full</span>}
+                      </div>
+                    )}
                   </div>
-                  {info && (
-                    <div className="mt-2 flex flex-wrap gap-3 text-xs" style={{ color: 'var(--muted)' }}>
-                      <span>Deposit <span className="tabular-nums font-medium" style={{ color: 'var(--ink-2)' }}>{formatUsdc(info.deposit)} USDC</span></span>
-                      {isActive && <span>Paid <span className="tabular-nums font-medium" style={{ color: 'var(--ink-2)' }}>{formatUsdc(info.paidThisCycle)} USDC</span></span>}
-                      {isActive && info.owedNow > 0n && <span style={{ color: 'var(--danger)' }}>Owes <span className="tabular-nums font-medium">{formatUsdc(info.owedNow)} USDC</span></span>}
-                      {isPending && !mDepFull && <span style={{ color: 'var(--danger)' }}>Deposit not full</span>}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </section>
 
         {/* Activity */}
@@ -487,7 +577,7 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
             <div className="rounded-xl p-3 mb-2 flex items-center gap-2" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
               <p className="text-xs flex-1" style={{ color: 'var(--danger)' }}>{eventsError}</p>
               <button
-                onClick={() => { void loadOlderEvents(); }}
+                onClick={() => { loadOlderEvents(); }}
                 className="text-xs font-semibold shrink-0"
                 style={{ color: 'var(--danger)' }}
               >
@@ -496,7 +586,11 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
             </div>
           )}
           {eventsLoading && events.length === 0 ? (
-            <div className="h-10 rounded-2xl animate-pulse" style={{ background: 'var(--surface-muted)' }} />
+            <div className="space-y-1">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="h-9 rounded-xl animate-pulse" style={{ background: 'var(--surface-muted)' }} />
+              ))}
+            </div>
           ) : events.length === 0 ? (
             <p className="text-xs" style={{ color: 'var(--subtle)' }}>No activity yet.</p>
           ) : (
@@ -515,7 +609,7 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
               </div>
               {eventsHasMore && (
                 <button
-                  onClick={() => { void loadOlderEvents(); }}
+                  onClick={() => { loadOlderEvents(); }}
                   disabled={eventsLoadingMore}
                   className="mt-3 w-full text-xs font-semibold py-2 rounded-xl transition-opacity"
                   style={{

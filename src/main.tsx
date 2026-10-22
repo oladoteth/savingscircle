@@ -23,7 +23,7 @@ import { config } from './config'
 import App from './App'
 import './index.css'
 
-const queryClient = new QueryClient()
+export const queryClient = new QueryClient()
 
 // Studio logo SVG
 const StudioLogo = () => (

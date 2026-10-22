@@ -1,3 +1,4 @@
+import { ConnectKitButton } from 'connectkit';
 import { ArrowLeft, ExternalLink, CheckCircle, Clock, AlertTriangle, XCircle } from 'lucide-react';
 import { useReputation } from '@/hooks/useCircle';
 import { shortAddr, buildExplorerAddrUrl } from '@/utils/format';
@@ -43,9 +44,12 @@ export default function MemberProfile({ address: addr, onNavigate }: Props) {
   return (
     <div className="min-h-dvh" style={{ background: 'var(--bg-gradient)' }}>
       <div className="mx-auto max-w-md px-4 pt-6 pb-20">
-        <button onClick={() => onNavigate(-1)} className="flex items-center gap-1.5 text-sm mb-5" style={{ color: 'var(--muted)' }}>
-          <ArrowLeft className="size-4" /> Back
-        </button>
+        <div className="flex items-center justify-between mb-5">
+          <button onClick={() => onNavigate(-1)} className="flex items-center gap-1.5 text-sm" style={{ color: 'var(--muted)' }}>
+            <ArrowLeft className="size-4" /> Back
+          </button>
+          <ConnectKitButton />
+        </div>
 
         {/* Identity */}
         <section className="rounded-3xl p-5 mb-5" style={glass.card}>

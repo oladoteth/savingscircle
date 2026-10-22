@@ -25,20 +25,17 @@ export interface MyCirclesResult {
   createdIds: bigint[];
   loading:    boolean;
   error:      string | null;
+  refetch:    () => void;
 }
 
 export function useMyCircles(
   address: `0x${string}` | undefined,
-  /** Increment this to force a re-fetch after a tx confirms. */
-  refetchKey?: unknown,
 ): MyCirclesResult {
-  void refetchKey; // wagmi re-evaluates when `enabled` changes; key also
-                   // triggers remount of the query when passed as queryKey.
-
   const {
     data,
     isLoading,
     error: readError,
+    refetch,
   } = useReadContracts({
     contracts: [
       {
@@ -90,5 +87,5 @@ export function useMyCircles(
 
   if (readError) console.error("[useMyCircles]", readError);
 
-  return { memberIds, createdIds, loading: isLoading, error: errorMsg };
+  return { memberIds, createdIds, loading: isLoading, error: errorMsg, refetch: () => { void refetch(); } };
 }

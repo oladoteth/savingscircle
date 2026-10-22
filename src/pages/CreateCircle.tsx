@@ -1,11 +1,13 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { useSwitchChain } from 'wagmi';
 import { decodeEventLog } from 'viem';
+import { ConnectKitButton } from 'connectkit';
 import { ArrowLeft, Link as LinkIcon } from 'lucide-react';
 import { SAVINGS_CIRCLES_ABI } from '@/abi';
 import { CONTRACT_ADDRESS, CHAIN_ID } from '@/appConfig';
 
+import { useInvalidateAll } from '@/hooks/useInvalidateAll';
 import { parseUsdc, formatUsdc } from '@/utils/format';
 import { TxButton } from '@/components/shared/TxButton';
 import { ErrorMsg } from '@/components/shared/ErrorMsg';
@@ -49,6 +51,10 @@ export default function CreateCircle({ onNavigate }: Props) {
 
   const { writeContract, data: hash, isPending, error } = useWriteContract();
   const { isLoading: isConfirming, isSuccess, data: receipt } = useWaitForTransactionReceipt({ hash });
+  const invalidateAll = useInvalidateAll();
+
+  // Invalidate queries when circle is created so Home refreshes
+  useEffect(() => { if (isSuccess) invalidateAll(); }, [isSuccess, invalidateAll]);
 
   // Derive circle ID from receipt during render — avoids setState-in-effect pattern.
   const derivedId = useMemo(() => {
@@ -95,9 +101,12 @@ export default function CreateCircle({ onNavigate }: Props) {
   return (
     <div className="min-h-dvh" style={{ background: 'var(--bg-gradient)' }}>
       <div className="mx-auto max-w-md px-4 pt-6 pb-20">
-        <button onClick={() => onNavigate(-1)} className="flex items-center gap-1.5 text-sm mb-5" style={{ color: 'var(--muted)' }}>
-          <ArrowLeft className="size-4" /> Back
-        </button>
+        <div className="flex items-center justify-between mb-5">
+          <button onClick={() => onNavigate(-1)} className="flex items-center gap-1.5 text-sm" style={{ color: 'var(--muted)' }}>
+            <ArrowLeft className="size-4" /> Back
+          </button>
+          <ConnectKitButton />
+        </div>
 
         <h1 className="display text-2xl font-bold mb-1" style={{ color: 'var(--ink)', letterSpacing: '-0.02em' }}>
           Create a circle

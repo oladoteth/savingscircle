@@ -6,6 +6,8 @@ interface TxButtonProps {
   disabledReason?: string;
   isPending?: boolean;
   isConfirming?: boolean;
+  /** Show "Updating…" while a refetch is in-flight after confirmation. */
+  isUpdating?: boolean;
   label: string;
   variant?: "primary" | "secondary" | "danger" | "ghost";
   fullWidth?: boolean;
@@ -13,10 +15,10 @@ interface TxButtonProps {
 }
 
 export function TxButton({
-  onClick, disabled, disabledReason, isPending, isConfirming, label,
+  onClick, disabled, disabledReason, isPending, isConfirming, isUpdating, label,
   variant = "primary", fullWidth = false, size = "md",
 }: TxButtonProps) {
-  const busy = isPending || isConfirming;
+  const busy = isPending || isConfirming || isUpdating;
   const isDisabled = disabled || busy;
 
   const base = `inline-flex items-center justify-center gap-2 font-semibold rounded-2xl transition-all
@@ -38,6 +40,13 @@ export function TxButton({
     ghost:     { background: "transparent", color: "var(--accent)" },
   };
 
+  function statusLabel() {
+    if (isPending)    return "Confirm in wallet…";
+    if (isConfirming) return "Confirming…";
+    if (isUpdating)   return "Updating…";
+    return label;
+  }
+
   return (
     <div className="flex flex-col gap-1">
       <button
@@ -49,7 +58,7 @@ export function TxButton({
         {busy ? (
           <>
             <Loader2 className="size-4 animate-spin" />
-            {isPending ? "Confirm in wallet…" : "Confirming…"}
+            {statusLabel()}
           </>
         ) : label}
       </button>

@@ -1,9 +1,11 @@
+import { useEffect } from 'react';
 import { useAccount } from 'wagmi';
 import { ConnectKitButton } from 'connectkit';
 import { Plus, ChevronRight, AlertCircle, RefreshCw } from 'lucide-react';
 import { useUsdcBalance, useClaimable, useCircle } from '@/hooks/useCircle';
 import { useMyCircles } from '@/hooks/useMyCircles';
 import { useContractAction } from '@/hooks/useContractWrite';
+import { useInvalidateAll } from '@/hooks/useInvalidateAll';
 import { formatUsdc } from '@/utils/format';
 import { CONTRACT_ADDRESS, USDC_DECIMALS, CHAIN_ID } from '@/appConfig';
 import { SAVINGS_CIRCLES_ABI } from '@/abi';
@@ -31,9 +33,12 @@ function CircleRow({ id, onNavigate, showJoin }: { id: bigint; onNavigate: (p: s
     <div className="h-14 rounded-2xl animate-pulse" style={{ background: 'var(--surface-muted)' }} />
   );
 
-  const stateLabel = c.state === 0
-    ? `Forming ${c.memberCount}/${c.size}`
-    : `Cycle ${c.cycle} running`;
+  const isBetweenCycles = c.state === 0 && c.cycle > 0;
+  const stateLabel = isBetweenCycles
+    ? 'Between cycles'
+    : c.state === 0
+      ? `Forming ${c.memberCount}/${c.size}`
+      : `Cycle ${c.cycle} running`;
 
   const potPct = c.payout > 0n
     ? Math.min(100, Number((c.pot * 100n) / c.payout))
@@ -48,8 +53,8 @@ function CircleRow({ id, onNavigate, showJoin }: { id: bigint; onNavigate: (p: s
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
           <span className="text-xs font-semibold px-2 py-0.5 rounded-lg" style={{
-            background: c.state === 1 ? 'rgba(26,128,71,0.12)' : 'var(--surface-muted)',
-            color: c.state === 1 ? 'var(--success)' : 'var(--muted)',
+            background: c.state === 1 ? 'rgba(26,128,71,0.12)' : isBetweenCycles ? 'rgba(251,191,36,0.12)' : 'var(--surface-muted)',
+            color: c.state === 1 ? 'var(--success)' : isBetweenCycles ? '#d97706' : 'var(--muted)',
           }}>
             {stateLabel}
           </span>
@@ -76,8 +81,23 @@ export default function Home({ onNavigate }: Props) {
   const { address, chainId, isConnected } = useAccount();
   const { data: balance } = useUsdcBalance(address);
   const { data: claimableRaw } = useClaimable(address);
-  const { memberIds, createdIds, loading: circlesLoading, error: circlesError } = useMyCircles(address);
+  const { memberIds, createdIds, loading: circlesLoading, error: circlesError, refetch: refetchCircles } = useMyCircles(address);
   const { writeContract, hash, isPending, isConfirming, isSuccess, error, wrongChain, switchChain } = useContractAction();
+  const invalidateAll = useInvalidateAll();
+
+  // Invalidate all queries + refetch circles on confirmed withdraw
+  useEffect(() => {
+    if (isSuccess) {
+      invalidateAll();
+      refetchCircles();
+    }
+  }, [isSuccess, invalidateAll, refetchCircles]);
+
+  // Refetch on mount (catches state changes from other pages)
+  useEffect(() => {
+    if (address) refetchCircles();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address]);
 
   const lowBalance = balance !== undefined && balance < BigInt(Math.floor(0.05 * 10 ** USDC_DECIMALS));
 
@@ -120,7 +140,9 @@ export default function Home({ onNavigate }: Props) {
               </p>
               <div className="flex items-baseline gap-1 mb-1">
                 <span className="display text-4xl font-bold tabular-nums" style={{ color: 'var(--ink)' }}>
-                  {balance !== undefined ? formatUsdc(balance) : '—'}
+                  {balance !== undefined ? formatUsdc(balance) : (
+                    <span className="inline-block w-24 h-9 rounded-xl animate-pulse" style={{ background: 'var(--surface-muted)' }} />
+                  )}
                 </span>
                 <span className="text-lg font-medium" style={{ color: 'var(--subtle)' }}>USDC</span>
               </div>
@@ -146,6 +168,7 @@ export default function Home({ onNavigate }: Props) {
                       onClick={handleWithdraw}
                       isPending={isPending}
                       isConfirming={isConfirming}
+                      isUpdating={isSuccess}
                       size="sm"
                     />
                   </div>
@@ -164,7 +187,7 @@ export default function Home({ onNavigate }: Props) {
               <div className="rounded-2xl p-3 mb-3 flex items-center gap-2" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
                 <AlertCircle className="size-4 shrink-0" style={{ color: 'var(--danger)' }} />
                 <p className="text-xs flex-1" style={{ color: 'var(--danger)' }}>{circlesError}</p>
-                <button onClick={() => window.location.reload()} className="shrink-0">
+                <button onClick={() => refetchCircles()} className="shrink-0">
                   <RefreshCw className="size-4" style={{ color: 'var(--danger)' }} />
                 </button>
               </div>

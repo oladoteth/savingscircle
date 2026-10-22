@@ -98,8 +98,9 @@ function decodeLog(log: Log, circleId: bigint): ActivityItem | null {
       const kind = KIND_MAP[(decoded.eventName).toLowerCase()];
       if (!kind) return null;
       const a = (decoded.args ?? {}) as Record<string, unknown>;
-      // Filter by circle id for events that carry it
-      if (a["id"] !== undefined && (a["id"] as bigint) !== circleId) return null;
+      // Events without a circle id (e.g. Withdrawn) are excluded from the circle feed.
+      if (a["id"] === undefined) return null;
+      if ((a["id"] as bigint) !== circleId) return null;
       return {
         blockNumber:    log.blockNumber ?? 0n,
         logIndex:       log.logIndex ?? 0,
@@ -199,13 +200,16 @@ export function useCircleEvents(id: bigint | undefined): UseCircleEventsResult {
     setError(null);
     consecutiveFails.current = 0;
 
-    // Re-use cache if available
+    // Clear previous circle's events immediately (or pre-fill from cache)
+    // so stale events never show while loading the new circle.
     const cached = eventCache.get(circleId);
+    setEvents(cached ? cached.items : []);
+    setHasMore(cached ? cached.oldestBlock > DEPLOY_BLOCK : false);
+
+    // Re-use cache if already fully loaded
     if (cached) {
-      setEvents(cached.items);
       oldestFetchedBlock.current = cached.oldestBlock;
       latestSeenBlock.current    = cached.latestBlock;
-      setHasMore(cached.oldestBlock > DEPLOY_BLOCK);
       setLoading(false);
       backfillDone.current = true;
       return;
@@ -340,10 +344,13 @@ export function useCircleEvents(id: bigint | undefined): UseCircleEventsResult {
   // ── Mount / id-change effect ───────────────────────────────────────────────
   useEffect(() => {
     if (id === undefined || !CONTRACT_ADDRESS) return;
-    backfillDone.current     = false;
-    latestSeenBlock.current  = null;
+    backfillDone.current       = false;
+    latestSeenBlock.current    = null;
     oldestFetchedBlock.current = null;
-    consecutiveFails.current = 0;
+    consecutiveFails.current   = 0;
+    // State reset (setEvents/setHasMore/setError) happens inside backfill()
+    // which already handles the cache-hit path synchronously before any async work.
+    // No synchronous setState calls here to satisfy the React Compiler lint rule.
 
     const init = setTimeout(() => { void backfill(id); }, 0);
     const interval = setInterval(() => { void poll(id); }, POLL_MS);

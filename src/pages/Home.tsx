@@ -5,7 +5,7 @@ import { useUsdcBalance, useClaimable, useCircle } from '@/hooks/useCircle';
 import { useMyCircles } from '@/hooks/useMyCircles';
 import { useContractAction } from '@/hooks/useContractWrite';
 import { formatUsdc } from '@/utils/format';
-import { CONTRACT_ADDRESS, USDC_DECIMALS } from '@/appConfig';
+import { CONTRACT_ADDRESS, USDC_DECIMALS, CHAIN_ID } from '@/appConfig';
 import { SAVINGS_CIRCLES_ABI } from '@/abi';
 import { TxButton } from '@/components/shared/TxButton';
 import { ReceiptLink } from '@/components/shared/ReceiptLink';
@@ -82,7 +82,7 @@ export default function Home({ onNavigate }: Props) {
   const lowBalance = balance !== undefined && balance < BigInt(Math.floor(0.05 * 10 ** USDC_DECIMALS));
 
   function handleWithdraw() {
-    if (wrongChain) { switchChain({ chainId: 5042002 }); return; }
+    if (wrongChain) { switchChain({ chainId: CHAIN_ID }); return; }
     writeContract({ address: CONTRACT_ADDRESS, abi: SAVINGS_CIRCLES_ABI, functionName: 'withdraw', args: [] });
   }
 

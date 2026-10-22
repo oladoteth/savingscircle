@@ -27,16 +27,18 @@ Deployed with Arc Foundry (`arc-forge`) from the `contracts/SavingsCircles.sol` 
 # Deploy
 arc-forge create contracts/SavingsCircles.sol:SavingsCircles \
   --rpc-url https://rpc.mainnet.arc.io \
-  --private-key $PRIVATE_KEY \
+  --account arc-deployer \
+  --broadcast \
   --constructor-args 0x3600000000000000000000000000000000000000
 
 # Verify source
-arc-forge verify-contract \
-  0x48E42a3FBc1672591290c7782D6E97B96C02AD69 \
-  contracts/SavingsCircles.sol:SavingsCircles \
-  --rpc-url https://rpc.mainnet.arc.io \
-  --constructor-args $(cast abi-encode "constructor(address)" 0x3600000000000000000000000000000000000000)
+arc-forge verify-contract 0x48E42a3FBc1672591290c7782D6E97B96C02AD69 contracts/SavingsCircles.sol:SavingsCircles \
+  --chain-id 5042 \
+  --verifier sourcify \
+  --constructor-args 0x0000000000000000000000003600000000000000000000000000000000000000
 ```
+
+Sourcify returned an exact match and forwarded the verification to explorer.arc.io and arc.etherscan.io.
 
 ## Running the app
 

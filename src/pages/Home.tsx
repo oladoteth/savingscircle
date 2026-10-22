@@ -1,6 +1,6 @@
 import { useAccount } from 'wagmi';
 import { ConnectKitButton } from 'connectkit';
-import { Plus, ChevronRight } from 'lucide-react';
+import { Plus, ChevronRight, AlertCircle, RefreshCw } from 'lucide-react';
 import { useUsdcBalance, useClaimable, useCircle } from '@/hooks/useCircle';
 import { useMyCircles } from '@/hooks/useMyCircles';
 import { useContractAction } from '@/hooks/useContractWrite';
@@ -24,7 +24,7 @@ const glass = {
 
 interface Props { onNavigate: (path: string | number) => void }
 
-function CircleRow({ id, onNavigate }: { id: bigint; onNavigate: (p: string | number) => void }) {
+function CircleRow({ id, onNavigate, showJoin }: { id: bigint; onNavigate: (p: string | number) => void; showJoin?: boolean }) {
   const { circle: { data: c } } = useCircle(id);
 
   if (!c) return (
@@ -63,7 +63,11 @@ function CircleRow({ id, onNavigate }: { id: bigint; onNavigate: (p: string | nu
           </div>
         )}
       </div>
-      <ChevronRight className="size-4 shrink-0" style={{ color: 'var(--subtle)' }} />
+      {showJoin ? (
+        <span className="text-xs font-semibold px-2 py-1 rounded-xl shrink-0" style={{ background: 'var(--accent)', color: '#fff' }}>Join</span>
+      ) : (
+        <ChevronRight className="size-4 shrink-0" style={{ color: 'var(--subtle)' }} />
+      )}
     </button>
   );
 }
@@ -72,7 +76,7 @@ export default function Home({ onNavigate }: Props) {
   const { address, chainId, isConnected } = useAccount();
   const { data: balance } = useUsdcBalance(address);
   const { data: claimableRaw } = useClaimable(address);
-  const { circleIds, loading: circlesLoading } = useMyCircles(address);
+  const { memberIds, createdIds, loading: circlesLoading, error: circlesError } = useMyCircles(address);
   const { writeContract, hash, isPending, isConfirming, isSuccess, error, wrongChain, switchChain } = useContractAction();
 
   const lowBalance = balance !== undefined && balance < BigInt(Math.floor(0.05 * 10 ** USDC_DECIMALS));
@@ -156,24 +160,50 @@ export default function Home({ onNavigate }: Props) {
               <h2 className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>My circles</h2>
             </div>
 
+            {circlesError && (
+              <div className="rounded-2xl p-3 mb-3 flex items-center gap-2" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
+                <AlertCircle className="size-4 shrink-0" style={{ color: 'var(--danger)' }} />
+                <p className="text-xs flex-1" style={{ color: 'var(--danger)' }}>{circlesError}</p>
+                <button onClick={() => window.location.reload()} className="shrink-0">
+                  <RefreshCw className="size-4" style={{ color: 'var(--danger)' }} />
+                </button>
+              </div>
+            )}
+
             {circlesLoading ? (
               <div className="space-y-2">
                 {[1, 2].map((i) => (
                   <div key={i} className="h-14 rounded-2xl animate-pulse" style={{ background: 'var(--surface-muted)' }} />
                 ))}
               </div>
-            ) : circleIds.length === 0 ? (
+            ) : memberIds.length === 0 && createdIds.length === 0 ? (
               <div className="rounded-2xl p-5 text-center" style={{ background: 'var(--surface-muted)' }}>
                 <p className="text-sm" style={{ color: 'var(--muted)' }}>
                   No circles yet. Create one or ask someone to share their circle link.
                 </p>
               </div>
             ) : (
-              <div className="space-y-2">
-                {circleIds.map((id) => (
-                  <CircleRow key={id.toString()} id={id} onNavigate={onNavigate} />
-                ))}
-              </div>
+              <>
+                {memberIds.length > 0 && (
+                  <div className="space-y-2 mb-4">
+                    {memberIds.map((id) => (
+                      <CircleRow key={id.toString()} id={id} onNavigate={onNavigate} />
+                    ))}
+                  </div>
+                )}
+                {createdIds.length > 0 && (
+                  <>
+                    <p className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: 'var(--muted)' }}>
+                      Created by you — join to participate
+                    </p>
+                    <div className="space-y-2">
+                      {createdIds.map((id) => (
+                        <CircleRow key={id.toString()} id={id} onNavigate={onNavigate} showJoin />
+                      ))}
+                    </div>
+                  </>
+                )}
+              </>
             )}
 
             <button

@@ -85,7 +85,7 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
   const { circle: { data: c, refetch: refetchCircle }, members: { data: members, refetch: refetchMembers } } = useCircle(id);
   const myInfoQ = useMemberInfo(id, address);
   const allInfos = useAllMemberInfos(id, (members ?? []));
-  const { events, loading: eventsLoading } = useCircleEvents(id);
+  const { events, loading: eventsLoading, loadingMore: eventsLoadingMore, hasMore: eventsHasMore, error: eventsError, loadOlder: loadOlderEvents } = useCircleEvents(id);
   const { data: allowance, refetch: refetchAllowance } = useUsdcAllowance(address, CONTRACT_ADDRESS);
 
   const wrongChain = !!chainId && chainId !== CHAIN_ID;
@@ -483,23 +483,51 @@ export default function CirclePage({ circleId: id, onNavigate }: Props) {
         {/* Activity */}
         <section>
           <h3 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: 'var(--muted)' }}>Activity</h3>
+          {eventsError && (
+            <div className="rounded-xl p-3 mb-2 flex items-center gap-2" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
+              <p className="text-xs flex-1" style={{ color: 'var(--danger)' }}>{eventsError}</p>
+              <button
+                onClick={() => { void loadOlderEvents(); }}
+                className="text-xs font-semibold shrink-0"
+                style={{ color: 'var(--danger)' }}
+              >
+                Retry
+              </button>
+            </div>
+          )}
           {eventsLoading && events.length === 0 ? (
             <div className="h-10 rounded-2xl animate-pulse" style={{ background: 'var(--surface-muted)' }} />
           ) : events.length === 0 ? (
             <p className="text-xs" style={{ color: 'var(--subtle)' }}>No activity yet.</p>
           ) : (
-            <div className="space-y-1">
-              {events.map((item, i) => (
-                <div key={i} className="flex items-center justify-between gap-2 py-2 px-3 rounded-xl" style={{ background: 'var(--surface)' }}>
-                  <p className="text-xs" style={{ color: activityColor(item) }}>{activityLabel(item)}</p>
-                  {item.txHash && (
-                    <a href={buildExplorerTxUrl(item.txHash)} target="_blank" rel="noreferrer">
-                      <ChevronRight className="size-3" style={{ color: 'var(--subtle)' }} />
-                    </a>
-                  )}
-                </div>
-              ))}
-            </div>
+            <>
+              <div className="space-y-1">
+                {events.map((item, i) => (
+                  <div key={i} className="flex items-center justify-between gap-2 py-2 px-3 rounded-xl" style={{ background: 'var(--surface)' }}>
+                    <p className="text-xs" style={{ color: activityColor(item) }}>{activityLabel(item)}</p>
+                    {item.txHash && (
+                      <a href={buildExplorerTxUrl(item.txHash)} target="_blank" rel="noreferrer">
+                        <ChevronRight className="size-3" style={{ color: 'var(--subtle)' }} />
+                      </a>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {eventsHasMore && (
+                <button
+                  onClick={() => { void loadOlderEvents(); }}
+                  disabled={eventsLoadingMore}
+                  className="mt-3 w-full text-xs font-semibold py-2 rounded-xl transition-opacity"
+                  style={{
+                    background: 'var(--surface-muted)',
+                    color: 'var(--muted)',
+                    opacity: eventsLoadingMore ? 0.5 : 1,
+                  }}
+                >
+                  {eventsLoadingMore ? 'Loading…' : 'Load older activity'}
+                </button>
+              )}
+            </>
           )}
         </section>
       </div>

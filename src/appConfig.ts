@@ -14,6 +14,9 @@ export const EXPLORER_BASE   = "https://explorer.testnet.arc.io";
 export const USDC_ADDRESS    = "0x3600000000000000000000000000000000000000" as `0x${string}`;
 export const USDC_DECIMALS   = 6;
 export const CONTRACT_ADDRESS = "0xc7bb731ac10a15955017d6a5fe63d62ec526f661" as `0x${string}`;
+// Block the current contract was deployed at — used as the log scan start point.
+// Update this whenever the contract is redeployed.
+export const DEPLOY_BLOCK    = 68_165_781n;
 
 // ── Arc Mainnet (comment out Testnet block above and uncomment this) ──────────
 // export const CHAIN_ID        = 5042;

@@ -4,11 +4,39 @@ A permissionless on-demand ROSCA (ajo, tanda, susu) where the contract holds the
 
 ## Deployed contract
 
-| Network | Address |
-|---|---|
-| Arc Testnet | [0xe4a39b29fee8942eafed5798105ae8982b0662f5](https://explorer.testnet.arc.io/address/0xe4a39b29fee8942eafed5798105ae8982b0662f5) |
+| Network | Address | Notes |
+|---|---|---|
+| Arc Mainnet | [0x48E42a3FBc1672591290c7782D6E97B96C02AD69](https://explorer.arc.io/address/0x48E42a3FBc1672591290c7782D6E97B96C02AD69) | v2.2 — current |
+| Arc Testnet | [0xaa433394d212a4d2257b634a6da214037db66b62](https://explorer.testnet.arc.io/address/0xaa433394d212a4d2257b634a6da214037db66b62) | v2.2 testnet — superseded by mainnet |
 
-> The contract above is the previous (v1) deployment. The v2 contract (on-demand payout model) has not yet been re-deployed. Run `bun run contracts:deploy` or use Arc Studio's deploy flow to deploy the updated contract and update `src/appConfig.ts`.
+## Mainnet deployment
+
+The production contract is deployed and source-verified on Arc Mainnet at commit `102a0f961`.
+
+| Field | Value |
+|---|---|
+| Address | `0x48E42a3FBc1672591290c7782D6E97B96C02AD69` |
+| Deploy tx | `0xb4c19ea02650239c8b3e0d0c7b76697e3f062926d133f62d50b69e1bd13f449b` |
+| Deploy block | `27304433` |
+| Constructor arg | `0x3600000000000000000000000000000000000000` (Arc USDC) |
+| Explorer | [explorer.arc.io/address/0x48E42a3FBc1672591290c7782D6E97B96C02AD69](https://explorer.arc.io/address/0x48E42a3FBc1672591290c7782D6E97B96C02AD69) |
+
+Deployed with Arc Foundry (`arc-forge`) from the `contracts/SavingsCircles.sol` source at that commit, with no code changes from the Arc Studio testnet build:
+
+```bash
+# Deploy
+arc-forge create contracts/SavingsCircles.sol:SavingsCircles \
+  --rpc-url https://rpc.mainnet.arc.io \
+  --private-key $PRIVATE_KEY \
+  --constructor-args 0x3600000000000000000000000000000000000000
+
+# Verify source
+arc-forge verify-contract \
+  0x48E42a3FBc1672591290c7782D6E97B96C02AD69 \
+  contracts/SavingsCircles.sol:SavingsCircles \
+  --rpc-url https://rpc.mainnet.arc.io \
+  --constructor-args $(cast abi-encode "constructor(address)" 0x3600000000000000000000000000000000000000)
+```
 
 ## Running the app
 
